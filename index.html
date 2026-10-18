@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0d1230" />
+    <meta name="description" content="Action Ludo — classic 3D Ludo where every capture is a savage animal battle." />
+    <title>Action Ludo</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎲</text></svg>" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Bangers&family=Nunito:wght@600;800;900&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <div id="stage"></div>
+
+    <!-- Setup -->
+    <div id="setup" class="overlay">
+      <div class="card setup-card">
+        <h1 class="logo">ACTION <span>LUDO</span></h1>
+        <p class="tagline">Classic Ludo rules. Wild animals. Every capture is a fight to the death… and a chain-drag back to the cage.</p>
+        <div id="slots" class="slots"></div>
+        <p id="setup-error" class="error"></p>
+        <div class="actions">
+          <button id="btn-start" class="btn primary">Start Game</button>
+          <button id="btn-arena" class="btn">⚔ Battle Arena</button>
+        </div>
+        <details class="rules">
+          <summary>How to play</summary>
+          <ul>
+            <li>Every animal starts locked in a cage. Roll a <b>6</b> and a golden key unlocks a cage, releasing the animal onto your start square.</li>
+            <li>Move clockwise around the board, then up your coloured home column to the centre. You need the exact roll to get home.</li>
+            <li>Land on an opponent on a normal square and your animal attacks — the loser is torn apart, chained, and dragged back to its cage.</li>
+            <li>Star squares and start squares are safe: no fighting there.</li>
+            <li>Rolling a 6, capturing, or getting a piece home earns another roll. Three 6s in a row forfeits the turn.</li>
+            <li>First to bring all four animals home wins. Click the hovering die (or press <kbd>Space</kbd>) to roll; drag to orbit the camera.</li>
+          </ul>
+        </details>
+      </div>
+    </div>
+
+    <!-- Arena -->
+    <div id="arena" class="overlay hidden">
+      <div class="card arena-card">
+        <h2 class="title">⚔ Battle Arena</h2>
+        <p class="tagline">Pick any matchup and watch the fight, the chains and the cage.</p>
+        <div class="arena-cols">
+          <div class="arena-side" id="arena-atk"></div>
+          <div class="arena-vs">VS</div>
+          <div class="arena-side" id="arena-vic"></div>
+        </div>
+        <div class="actions">
+          <button id="btn-fight" class="btn primary">Fight!</button>
+          <button id="btn-random" class="btn">🎲 Random fight</button>
+          <button id="btn-arena-back" class="btn ghost">Back</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- In-game HUD -->
+    <div id="hud" class="hidden">
+      <div class="hud-top">
+        <div id="players" class="players"></div>
+        <div class="tools">
+          <button id="btn-speed" class="tool" title="Animation speed">1×</button>
+          <button id="btn-sound" class="tool" title="Sound on/off">🔊</button>
+          <button id="btn-cam" class="tool" title="Reset camera">🎥</button>
+          <button id="btn-menu" class="tool" title="Quit to menu">☰</button>
+        </div>
+      </div>
+      <div class="hud-bottom">
+        <div id="turn-card" class="turn-card">
+          <div id="die-face" class="die-face">–</div>
+          <div id="message" class="message"></div>
+        </div>
+        <button id="btn-roll" class="btn primary roll" disabled>🎲 Roll</button>
+      </div>
+      <button id="btn-ff" class="btn small ff hidden" title="Fast-forward this animation (Space)">⏩ Fast-forward</button>
+    </div>
+
+    <div id="arena-hud" class="hidden">
+      <button id="btn-arena-skip" class="btn ghost small">Skip ⏭</button>
+    </div>
+
+    <div id="banner" class="banner hidden"></div>
+    <div id="toast" class="toast"></div>
+
+    <div id="gameover" class="overlay hidden">
+      <div class="card gameover-card">
+        <h2 class="title">🏆 Game Over</h2>
+        <ol id="standings" class="standings"></ol>
+        <div class="actions">
+          <button id="btn-again" class="btn primary">Play Again</button>
+          <button id="btn-menu2" class="btn">Main Menu</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
