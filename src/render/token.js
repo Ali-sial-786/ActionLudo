@@ -6,9 +6,10 @@ const rimGeo = new THREE.TorusGeometry(0.375, 0.022, 8, 40);
 const ringGeo = new THREE.TorusGeometry(0.47, 0.045, 8, 48);
 
 export class TokenView {
-  constructor(token, colorHex, animalId) {
+  constructor(token, colorHex, animalId, style = 'action') {
     this.token = token;
     this.animal = animalId;
+    this.style = style;
     this.colorHex = colorHex;
     this.root = new THREE.Group();
     this.root.userData.tokenView = this;
@@ -40,7 +41,7 @@ export class TokenView {
     this.ring.visible = false;
     this.root.add(this.ring);
 
-    const built = createAnimal(animalId);
+    const built = createAnimal(animalId, style);
     this.model = built.model;
     this.parts = built.parts;
     this.idleFn = built.idle;

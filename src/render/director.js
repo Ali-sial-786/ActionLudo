@@ -15,8 +15,9 @@ export class Director {
   }
 
   // `scale` pushes every shot further out for bulky animals.
-  begin(A, V, scale = 1) {
+  begin(A, V, scale = 1, look = 'action') {
     this.scale = scale;
+    this.look = look;
     this.A = A.clone();
     this.V = V.clone();
     this.f = V.clone().sub(A).setY(0);
@@ -26,7 +27,7 @@ export class Director {
     const toCam = this.world.camera.position.clone().sub(A).setY(0);
     if (this.r.dot(toCam) < 0) this.r.negate();
     this.mid = A.clone().add(V).multiplyScalar(0.5);
-    this.world.setCinematicLook(true, this.mid);
+    this.world.setCinematicLook(true, this.mid, look);
   }
 
   end() {

@@ -178,11 +178,13 @@ export class World {
   }
 
   // Cinematic mode on/off: letterbox, colour grade, depth of field and battle lighting.
-  setCinematicLook(on, center = null) {
-    this.post.target = on ? 1 : 0;
-    this.mood.target = on ? 1 : 0;
+  // look 'action' = grim grade, depth of field, dark battle lighting; 'kids' keeps the bright normal look.
+  setCinematicLook(on, center = null, look = 'action') {
+    const grim = on && look === 'action';
+    this.post.target = grim ? 1 : 0;
+    this.mood.target = grim ? 1 : 0;
     if (center) this.mood.center.copy(center);
-    document.body.classList.toggle('letterbox', on);
+    document.body.classList.toggle('letterbox', grim);
   }
 
   // Slow time down to `factor` for `hold` real seconds, then ease back to normal speed.

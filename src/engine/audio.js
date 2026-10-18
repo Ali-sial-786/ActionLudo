@@ -250,4 +250,9 @@ const SOUNDS = {
   creak: (s) => s.tone({ type: 'sawtooth', freq: 90, to: 140, dur: 0.5, vol: 0.08, vibrato: 30 }),
 };
 
+// Lets other modules (e.g. Kids-mode sounds) add named effects: registerSounds({ boing: (s, opt) => s.tone(...) }).
+export function registerSounds(map) {
+  Object.assign(SOUNDS, map);
+}
+
 export const sfx = new Sfx();

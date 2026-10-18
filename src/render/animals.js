@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { featherMaps, furMaps, scaleMaps, skinMaps, tigerStripes } from './textures.js';
+import { buildKidAnimal } from './animalsKid.js';
 
 // Procedural animals built from smooth, textured primitives. Every model faces +z, stands on y = 0
 // and is roughly one board square long. Builders return { model, parts, idle(t) } where parts are the
@@ -799,8 +800,10 @@ const BUILDERS = {
   crocodile: buildCrocodile,
 };
 
-export function createAnimal(id) {
-  const built = (BUILDERS[id] || buildTiger)();
+// style 'kids' builds the cute Kids-mode version of the animal.
+export function createAnimal(id, style = 'action') {
+  const realistic = BUILDERS[id] || buildTiger;
+  const built = style === 'kids' ? buildKidAnimal(id, realistic) : realistic();
   built.model.traverse((o) => {
     o.userData.rest = { position: o.position.clone(), quaternion: o.quaternion.clone(), scale: o.scale.clone() };
   });

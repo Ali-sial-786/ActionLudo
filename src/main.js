@@ -7,6 +7,16 @@ import { GameController } from './game/controller.js';
 import { Hud } from './ui/hud.js';
 import { sfx } from './engine/audio.js';
 import { goreSettings } from './render/gore.js';
+import { settings } from './settings.js';
+
+// Game mode: ?mode=kids in the URL, else the last choice saved in this browser.
+try {
+  const fromUrl = new URLSearchParams(location.search).get('mode');
+  const saved = localStorage.getItem('action-ludo-mode');
+  settings.mode = fromUrl === 'kids' || (!fromUrl && saved === 'kids') ? 'kids' : 'action';
+} catch {
+  /* storage unavailable */
+}
 
 const world = new World(document.getElementById('stage'));
 const board = new BoardView(world.scene);
@@ -63,7 +73,7 @@ const hud = new Hud({
     if (!world.cinematic) world.resetView(0.6);
   },
   onMenu: () => toMenu(),
-  onGore: (on) => (goreSettings.enabled = on),
+  onGore: (on) => (goreSettings.enabled = on && settings.mode !== 'kids'),
 });
 
 controller = new GameController({ world, board, fx, dice, sfx, hud });

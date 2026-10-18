@@ -16,6 +16,8 @@ import { TokenView } from '../render/token.js';
 import { Cage, unlockWithKey } from '../render/cage.js';
 import { BOARD_Y, finishSpot, squareWorld, yardCenter, yardSpot } from '../render/boardMesh.js';
 import { ATTACKS, makeContext, victimReacts } from '../render/battles.js';
+import { KID_ATTACKS, kidFloatHome, kidVictimReacts } from '../render/battlesKid.js';
+import { isKids, settings } from '../settings.js';
 import { Director } from '../render/director.js';
 import { BULK } from '../render/animals.js';
 import { Gore } from '../render/gore.js';
@@ -81,7 +83,7 @@ export class GameController {
     for (const player of game.players) {
       const color = COLORS[player.seat];
       for (const token of game.tokens.filter((t) => t.seat === player.seat)) {
-        const view = new TokenView(token, color.hex, player.animal);
+        const view = new TokenView(token, color.hex, player.animal, settings.mode);
         view.player = player;
         this.world.scene.add(view.root);
         this.views.set(token.id, view);
@@ -530,11 +532,12 @@ export class GameController {
 
     this.world.cinematic = true;
     const D = this.director;
-    D.begin(A, V, Math.max(BULK[atk.animal] ?? 1, BULK[vic.animal] ?? 1));
+    const kids = isKids();
+    D.begin(A, V, Math.max(BULK[atk.animal] ?? 1, BULK[vic.animal] ?? 1), kids ? 'kids' : 'action');
     const atkPlayer = atk.player;
     const vicPlayer = vic.player;
     this.hud.battleBanner(atkPlayer, vicPlayer);
-    this.sfx.play('heartbeat');
+    if (!kids) this.sfx.play('heartbeat');
     await Promise.all([
       D.move({ at: D.at('mid'), yaw: 12, pitch: 20, dist: 3.2, lift: 0.3, fov: 38 }, 0.8),
       this.anim.tween(0.4, (k) => {
@@ -562,8 +565,8 @@ export class GameController {
       atk.base.scale.setScalar(1 - k);
       vic.base.scale.setScalar(1 - k);
     });
-    await victimReacts(ctx);
-    await ATTACKS[atk.animal](ctx);
+    await (kids ? kidVictimReacts : victimReacts)(ctx);
+    await (kids ? KID_ATTACKS : ATTACKS)[atk.animal](ctx);
 
     // Re-root the attacker on the victim's square without a visual jump.
     const mw = new THREE.Vector3();
@@ -574,6 +577,15 @@ export class GameController {
     atk.base.scale.setScalar(0.01);
     this.anim.tween(0.3, (k) => atk.base.scale.setScalar(k), Ease.outBack);
     vic.base.visible = false;
+
+    if (kids) {
+      await this.kidAftermath(atk, vic, V, camSaved);
+      D.end();
+      vic.busy = false;
+      vic.idle = true;
+      this.world.cinematic = false;
+      return;
+    }
 
     // the victor stands over the remains and roars
     D.cut({ at: V, yaw: 25, pitch: 6, dist: 1.6, lift: 0.4, fov: 34 });
@@ -608,6 +620,24 @@ export class GameController {
     vic.busy = false;
     vic.idle = true;
     this.world.cinematic = false;
+  }
+
+  // Kids mode: a happy hop from the winner, then the loser floats back home and the cage closes.
+  async kidAftermath(atk, vic, V, camSaved) {
+    atk.resetPose();
+    await this.anim.tween(0.5, (k) => (atk.model.position.y = 0.07 + arc(k, 0.3)));
+    atk.idle = true;
+    const { token } = vic;
+    const spot = yardSpot(token.seat, token.index);
+    await kidFloatHome({ world: this.world, anim: this.anim, fx: this.fx, sfx: this.sfx, vic, spot });
+    vic.root.rotation.set(0, 0, 0);
+    vic.root.scale.setScalar(YARD_SCALE);
+    vic.restoreMaterials();
+    vic.resetPose();
+    vic.base.visible = true;
+    vic.base.scale.setScalar(1);
+    await this.cages.get(token.id).close(this.anim, this.sfx, this.fx);
+    await this.restoreCamera(camSaved, 0.8);
   }
 
   async dragHome(vic, camSaved) {
