@@ -38,6 +38,10 @@ export class World {
     this.setupLights();
     this.setupGround();
 
+    // Short-lived effect objects live here so an aborted sequence can be wiped in one go.
+    this.transient = new THREE.Group();
+    scene.add(this.transient);
+
     this.shakeAmount = 0;
     this.shakeOffset = new THREE.Vector3();
     this.cinematic = false;
@@ -186,6 +190,10 @@ export class World {
     const k = 1 - Math.exp(-dt * rate);
     this.camera.position.lerp(view.pos, k);
     this.controls.target.lerp(view.target, k);
+  }
+
+  clearTransient() {
+    this.transient.clear();
   }
 
   onFrame(fn) {

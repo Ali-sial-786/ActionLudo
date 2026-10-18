@@ -71,7 +71,7 @@ async function eagle(ctx) {
   );
   shadow.rotation.x = -Math.PI / 2;
   shadow.position.copy(ctx.V).setY(BOARD_Y + 0.015);
-  ctx.world.scene.add(shadow);
+  ctx.world.transient.add(shadow);
   const lookUp = anim.tween(0.7, (k) => (vic.model.rotation.x = -0.5 * Math.sin(k * Math.PI)));
   await anim.tween(0.7, (k) => {
     shadow.material.opacity = 0.45 * k;
@@ -87,7 +87,7 @@ async function eagle(ctx) {
     atk.model.rotation.x = lerp(0.9, -0.1, k);
     shadow.scale.setScalar(0.8 - k * 0.2);
   }, Ease.inQuad);
-  ctx.world.scene.remove(shadow);
+  shadow.removeFromParent();
   shadow.geometry.dispose();
   shadow.material.dispose();
   sfx.play('bite');
@@ -202,7 +202,7 @@ async function wolf(ctx) {
     g.model.position.copy(pos);
     g.model.scale.setScalar(1.1);
     g.model.lookAt(ctx.V.clone().setY(pos.y));
-    world.scene.add(g.model);
+    world.transient.add(g.model);
     ghosts.push({ ...g, pos, bite, away });
     fx.burst(pos.clone().setY(BOARD_Y + 0.3), { count: 14, colors: [0x9fd8ff, 0xffffff], glow: true, speed: 1.5, up: 1, size: [0.02, 0.05], life: [0.4, 0.8] });
   }
@@ -242,7 +242,7 @@ async function wolf(ctx) {
     setModelZ(atk, lerp(dist - 0.53, dist, k), 0);
     p.head.rotation.x = 0.2 * (1 - k);
   });
-  for (const gh of ghosts) world.scene.remove(gh.model);
+  for (const gh of ghosts) gh.model.removeFromParent();
   ghostMat.dispose();
 }
 
@@ -312,7 +312,7 @@ async function cobra(ctx) {
     m.position.copy(ctx.V).setY(BOARD_Y + 0.1 + i * 0.17);
     m.scale.setScalar(0.01);
     m.castShadow = true;
-    world.scene.add(m);
+    world.transient.add(m);
     coils.push(m);
   }
   sfx.play('hiss');
@@ -370,7 +370,7 @@ async function cobra(ctx) {
     p.hood.scale.set(1.6 - 0.6 * k, 1.3 - 0.3 * k, 1);
   });
   for (const m of coils) {
-    world.scene.remove(m);
+    m.removeFromParent();
     m.geometry.dispose();
   }
   coilMat.dispose();
@@ -397,7 +397,7 @@ async function shark(ctx) {
   pool.rotation.x = -Math.PI / 2;
   pool.position.copy(ctx.V).setY(BOARD_Y + 0.012);
   pool.scale.setScalar(0.01);
-  world.scene.add(pool);
+  world.transient.add(pool);
   const swirlStop = anim.every((dt) => {
     pool.rotation.z += dt * 4;
   });
@@ -410,7 +410,7 @@ async function shark(ctx) {
   const fin = new THREE.Mesh(new THREE.ConeGeometry(0.15, 0.4, 4), new THREE.MeshStandardMaterial({ color: 0x4d6a82, flatShading: true }));
   fin.scale.set(0.3, 1, 1);
   fin.castShadow = true;
-  world.scene.add(fin);
+  world.transient.add(fin);
   const vicLook = vic.model.rotation.y;
   await anim.tween(1.4, (k) => {
     const a = k * Math.PI * 4;
@@ -423,7 +423,7 @@ async function shark(ctx) {
     vic.model.rotation.y = vicLook + Math.sin(k * 20) * 0.3;
     vic.model.position.x = Math.sin(k * 50) * 0.02;
   });
-  world.scene.remove(fin);
+  fin.removeFromParent();
   fin.geometry.dispose();
   fin.material.dispose();
   vic.model.position.x = 0;
@@ -468,7 +468,7 @@ async function shark(ctx) {
   });
   swirlStop();
   ringLoop();
-  world.scene.remove(pool);
+  pool.removeFromParent();
   pool.geometry.dispose();
   poolMat.dispose();
   vic.root.position.y = BOARD_Y;

@@ -38,7 +38,7 @@ The die uses `crypto.getRandomValues` with rejection sampling, so every face has
 - **Roll:** click the hovering die, press the **Roll** button, or hit <kbd>Space</kbd>.
 - **Move:** click a glowing animal (hover shows where it will land).
 - **Camera:** drag to orbit, scroll or pinch to zoom, 🎥 resets the view.
-- **⏩ 1× / 2× / 3×** changes animation speed, 🔊 toggles sound.
+- **1× / 2× / 3×** changes animation speed; during a battle, **⏩ Fast-forward** (or <kbd>Space</kbd>) speeds through it. 🔊 toggles sound.
 
 Any seat can be **Human**, **CPU** or **Off** (2–4 players). Several humans can share one device and take turns.
 

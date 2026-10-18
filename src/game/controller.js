@@ -451,7 +451,7 @@ export class GameController {
     await unlockWithKey({
       cage,
       anim: this.anim,
-      scene: this.world.scene,
+      scene: this.world.transient,
       fx: this.fx,
       sfx: this.sfx,
       from: spot.clone().lerp(yc, 0.6).setY(BOARD_Y + 1.6),
@@ -583,7 +583,7 @@ export class GameController {
     const cage = this.cages.get(token.id);
     const spot = yardSpot(token.seat, token.index);
     const anchor = spot.clone().setY(BOARD_Y + 0.5);
-    const scene = this.world.scene;
+    const scene = this.world.transient;
     const body = () => vic.root.position.clone().setY(BOARD_Y + 0.18);
     const dist = anchor.distanceTo(body());
     // Tracking shot that keeps both the cage and the captive in frame, tightening as they meet.

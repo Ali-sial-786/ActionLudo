@@ -15,14 +15,13 @@ const ONE = new THREE.Vector3(1, 1, 1);
 
 // A chain of interlocking links laid along an arbitrary polyline (instanced for speed).
 export class Chain {
-  constructor(scene, max = 220) {
-    this.scene = scene;
+  constructor(parent, max = 220) {
     this.mesh = new THREE.InstancedMesh(linkGeo, linkMat, max);
     this.mesh.count = 0;
     this.mesh.castShadow = true;
     this.mesh.frustumCulled = false;
     this.max = max;
-    scene.add(this.mesh);
+    parent.add(this.mesh);
   }
 
   // reveal: fraction of the polyline (from its start) covered by links.
@@ -56,7 +55,7 @@ export class Chain {
   }
 
   dispose() {
-    this.scene.remove(this.mesh);
+    this.mesh.removeFromParent();
     this.mesh.dispose();
   }
 }

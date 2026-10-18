@@ -56,7 +56,8 @@ const _m = new THREE.Matrix4();
 export class Effects {
   constructor(world) {
     this.world = world;
-    this.scene = world.scene;
+    this.layer = world.transient;
+    this.stoppers = new Set();
     this.anim = world.anim;
     this.particles = [];
     this.debrisSets = new Set();
@@ -64,9 +65,10 @@ export class Effects {
   }
 
   clear() {
-    for (const p of this.particles) this.scene.remove(p.mesh);
+    for (const stop of [...this.stoppers]) stop();
     this.particles = [];
     this.debrisSets.clear();
+    this.world.clearTransient();
   }
 
   // ------------------------------------------------------------ particles
@@ -116,7 +118,7 @@ export class Effects {
         floor,
         grow,
       });
-      this.scene.add(mesh);
+      this.layer.add(mesh);
     }
   }
 
@@ -158,7 +160,7 @@ export class Effects {
     for (const p of this.particles) {
       p.life -= dt;
       if (p.life <= 0) {
-        this.scene.remove(p.mesh);
+        this.layer.remove(p.mesh);
         continue;
       }
       p.vel.y -= p.gravity * dt;
@@ -193,7 +195,7 @@ export class Effects {
     const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false, side: THREE.DoubleSide });
     const mesh = new THREE.Mesh(SHAPES.ring, mat);
     mesh.position.copy(pos).setY(y);
-    this.scene.add(mesh);
+    this.layer.add(mesh);
     await this.anim.tween(
       duration,
       (k) => {
@@ -203,7 +205,7 @@ export class Effects {
       },
       Ease.outCubic,
     );
-    this.scene.remove(mesh);
+    this.layer.remove(mesh);
     mat.dispose();
   }
 
@@ -217,12 +219,12 @@ export class Effects {
     });
     const sprite = new THREE.Sprite(mat);
     sprite.position.copy(pos);
-    this.scene.add(sprite);
+    this.layer.add(sprite);
     await this.anim.tween(duration, (k) => {
       sprite.scale.setScalar(size * (0.4 + k * 0.8));
       mat.opacity = 1 - k;
     });
-    this.scene.remove(sprite);
+    this.layer.remove(sprite);
     mat.dispose();
   }
 
@@ -251,7 +253,7 @@ export class Effects {
     sprite.renderOrder = 10;
     sprite.position.copy(pos);
     const aspect = w / 140;
-    this.scene.add(sprite);
+    this.layer.add(sprite);
     const tilt = rand(-0.25, 0.25);
     mat.rotation = tilt;
     await this.anim.tween(0.22, (k) => sprite.scale.set(size * aspect * 0.3 * k, size * 0.3 * k, 1), Ease.outBack);
@@ -261,7 +263,7 @@ export class Effects {
       sprite.position.y = y0 + k * 0.5;
       mat.opacity = 1 - k;
     });
-    this.scene.remove(sprite);
+    this.layer.remove(sprite);
     mat.dispose();
     tex.dispose();
   }
@@ -288,13 +290,13 @@ export class Effects {
       core.renderOrder = 10;
       s.add(core);
     }
-    this.scene.add(group);
+    this.layer.add(group);
     await this.anim.tween(0.1, (k) => streaks.forEach((s) => (s.scale.x = k)), Ease.outCubic);
     await this.anim.tween(0.35, (k) => {
       streaks.forEach((s) => (s.material.opacity = 1 - k));
       white.opacity = 1 - k;
     });
-    this.scene.remove(group);
+    this.layer.remove(group);
     group.traverse((o) => {
       if (o.isMesh) {
         o.geometry.dispose();
@@ -314,7 +316,7 @@ export class Effects {
       group.add(s);
       stars.push(s);
     }
-    this.scene.add(group);
+    this.layer.add(group);
     let t = 0;
     const tmp = new THREE.Vector3();
     const stop = this.world.onFrame((dt) => {
@@ -327,12 +329,15 @@ export class Effects {
         s.rotation.y = t * 8;
       });
     });
-    return () => {
+    const remove = () => {
       stop();
-      this.scene.remove(group);
+      this.stoppers.delete(remove);
+      this.layer.remove(group);
       geo.dispose();
       mat.dispose();
     };
+    this.stoppers.add(remove);
+    return remove;
   }
 
   // ------------------------------------------------------------ tearing animals apart
@@ -347,7 +352,7 @@ export class Effects {
     view.root.updateMatrixWorld(true);
     for (const mesh of meshes) {
       const parent = mesh.parent;
-      this.scene.attach(mesh);
+      this.layer.attach(mesh);
       const out = mesh.position.clone().sub(center);
       out.y = Math.max(out.y, 0) * 0.5;
       if (out.lengthSq() < 1e-4) out.set(rand(-1, 1), 0, rand(-1, 1));
