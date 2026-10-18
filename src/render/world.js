@@ -342,6 +342,14 @@ export class World {
       this.shakeOffset.set(0, 0, 0);
       this.shakeAmount = 0;
     }
+    // gentle handheld drift on cinematic shots
+    if (this.post.amount > 0.01) {
+      const t = this.anim.time;
+      const d = this.camera.position.distanceTo(this.controls.target) * 0.012 * this.post.amount;
+      this.shakeOffset.x += Math.sin(t * 1.3) * d;
+      this.shakeOffset.y += Math.sin(t * 1.7 + 1) * d * 0.6;
+      this.shakeOffset.z += Math.cos(t * 1.1) * d;
+    }
     this.camera.position.add(this.shakeOffset);
     if (this.post.amount > 0.01) {
       this.bokeh.uniforms.focus.value = this.camera.position.distanceTo(this.controls.target);

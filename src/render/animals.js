@@ -429,8 +429,8 @@ function buildRhino() {
 function buildGorilla() {
   const model = new THREE.Group();
   const p = {};
-  const coat = texMat('gorillaCoat', furMaps('gorillaCoat', { base: 0x1c1b1f, dark: 0x09090b, light: 0x3c3c44, back: 0x9a9aa2, spine: true, len: 9, strokes: 3200 }));
-  const fur = texMat('gorillaFur', furMaps('gorillaFur', { base: 0x1c1b1f, dark: 0x09090b, light: 0x3e3e46, len: 9, strokes: 3200 }));
+  const coat = texMat('gorillaCoat', furMaps('gorillaCoat', { base: 0x2c2b31, dark: 0x111114, light: 0x5a5a64, back: 0xa4a4ac, spine: true, len: 9, strokes: 3200 }));
+  const fur = texMat('gorillaFur', furMaps('gorillaFur', { base: 0x2c2b31, dark: 0x111114, light: 0x5c5c66, len: 9, strokes: 3200 }));
   const skin = texMat('gorillaSkin', skinMaps('gorillaSkin', { base: 0x2e2a2c, dark: 0x141213, light: 0x4a4443, wrinkles: 90 }), { roughness: 0.55, bumpScale: 1.8 });
 
   const body = (p.body = pivot(model));
@@ -618,6 +618,7 @@ function buildShark() {
   const foam = add(model, G.torus(0.1), mat(0xdfeef5, { roughness: 0.6 }), [0, 0.022, 0], [0.39, 0.39, 0.39], [Math.PI / 2, 0, 0]);
   foam.castShadow = false;
   foam.userData.noGore = true;
+  p.foam = foam;
 
   const b = (p.body = pivot(model, [0, 0.19, 0]));
   torso(b, hide, [0, 0, -0.04], [0.12, 0.115, 0.3]);
@@ -805,6 +806,9 @@ export function createAnimal(id) {
   });
   return built;
 }
+
+// How much screen an animal fills, relative to a tiger; the kill-cam backs off for bulky animals.
+export const BULK = { eagle: 1, tiger: 1, wolf: 1, bear: 1.2, cobra: 0.95, shark: 1.1, gorilla: 1.15, rhino: 1.3, scorpion: 0.95, crocodile: 1.05 };
 
 // Debris palette per animal (fur tufts, feathers, scales...) thrown along with the blood.
 export const DEBRIS = {

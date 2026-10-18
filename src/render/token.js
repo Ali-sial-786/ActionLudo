@@ -125,6 +125,8 @@ export class TokenView {
     const c = new THREE.Color(hex);
     for (const m of this.meshes()) {
       const mat = m.material;
+      // wounds added after isolation carry their own (unshared) material
+      mat.userData.baseColor ??= mat.color.clone();
       mat.color.copy(mat.userData.baseColor).lerp(c, amount);
       if (mat.emissive) mat.emissive.copy(c).multiplyScalar(glow);
     }

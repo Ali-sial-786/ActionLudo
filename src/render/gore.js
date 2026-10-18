@@ -128,6 +128,46 @@ export function fleshify(material) {
   return m;
 }
 
+// Axis-aligned bounds of `obj`'s meshes expressed in obj's own local space.
+function localBounds(obj) {
+  const box = new THREE.Box3();
+  const inv = new THREE.Matrix4().copy(obj.matrixWorld).invert();
+  const tmp = new THREE.Box3();
+  obj.updateMatrixWorld(true);
+  obj.traverse((o) => {
+    if (!o.isMesh || o.userData.wound) return;
+    if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+    tmp.copy(o.geometry.boundingBox).applyMatrix4(new THREE.Matrix4().multiplyMatrices(inv, o.matrixWorld));
+    box.union(tmp);
+  });
+  return box;
+}
+
+let capMats = null;
+// Raw cross-section where a body was cut: meat, a rim of fat/skin and the spine.
+function makeCap(rx, ry) {
+  capMats ??= {
+    meat: new THREE.MeshStandardMaterial({ color: 0x7a0a12, roughness: 0.22, metalness: 0.05 }),
+    fat: new THREE.MeshStandardMaterial({ color: 0xd9b0a0, roughness: 0.5 }),
+    dark: new THREE.MeshStandardMaterial({ color: 0x3a0206, roughness: 0.18 }),
+    bone: new THREE.MeshStandardMaterial({ color: 0xece2cf, roughness: 0.45 }),
+  };
+  const g = new THREE.Group();
+  const disc = (mat, sx, sy, z, x = 0, y = 0) => {
+    const m = new THREE.Mesh(new THREE.CircleGeometry(1, 28), mat);
+    m.scale.set(sx, sy, 1);
+    m.position.set(x, y, z);
+    g.add(m);
+    return m;
+  };
+  disc(capMats.fat, rx, ry, 0);
+  disc(capMats.meat, rx * 0.9, ry * 0.88, 0.001);
+  disc(capMats.dark, rx * 0.45, ry * 0.35, 0.002, 0, -ry * 0.15);
+  disc(capMats.bone, rx * 0.16, rx * 0.16, 0.003, 0, ry * 0.55);
+  disc(capMats.bone, rx * 0.07, ry * 0.22, 0.003, 0, ry * 0.25);
+  return g;
+}
+
 const _v = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _s = new THREE.Vector3();
@@ -378,9 +418,10 @@ export class Gore {
     const body = view.parts.body ?? view.model;
     const bodyParent = body.parent;
     if (mode === 'halves') {
-      const box = new THREE.Box3().setFromObject(body);
-      const centerW = box.getCenter(new THREE.Vector3());
-      const centerL = body.worldToLocal(centerW.clone());
+      const lb = localBounds(body);
+      const centerL = lb.getCenter(new THREE.Vector3());
+      const sizeL = lb.getSize(new THREE.Vector3());
+      const centerW = body.localToWorld(centerL.clone());
       const n = axis === 'x' ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1);
       const planeA = { local: new THREE.Plane().setFromNormalAndCoplanarPoint(n, centerL), world: new THREE.Plane() };
       const planeB = { local: new THREE.Plane().setFromNormalAndCoplanarPoint(n.clone().negate(), centerL), world: new THREE.Plane() };
@@ -398,6 +439,19 @@ export class Gore {
           o.material.clipShadows = true;
         }
       });
+      // cap both cut faces with a raw cross-section
+      const rx = (axis === 'x' ? sizeL.z : sizeL.x) * 0.42;
+      const ry = sizeL.y * 0.4;
+      for (const [half, sign] of [
+        [body, -1],
+        [twin, 1],
+      ]) {
+        const cap = makeCap(rx, ry);
+        cap.position.copy(centerL).addScaledVector(n, sign * 0.002);
+        cap.lookAt(cap.position.clone().addScaledVector(n, sign));
+        cap.userData.cap = true;
+        half.add(cap);
+      }
       bodyParent.add(twin);
       twin.position.copy(body.position);
       twin.quaternion.copy(body.quaternion);
@@ -467,6 +521,12 @@ export class Gore {
       if (trail > 0.05) trail = 0;
     });
     for (const j of jobs) {
+      const caps = [];
+      j.obj.traverse((o) => o.userData.cap && caps.push(o));
+      for (const c of caps) {
+        c.removeFromParent();
+        c.traverse((o) => o.isMesh && o.geometry.dispose());
+      }
       if (j.twin) {
         j.obj.removeFromParent();
         j.obj.traverse((o) => o.isMesh && o.material.dispose());

@@ -58,11 +58,13 @@ export class Effects {
     this.layer = world.transient;
     this.anim = world.anim;
     this.particles = [];
+    this.puffs = [];
     world.onFrame((dt) => this.step(dt));
   }
 
   clear() {
     this.particles = [];
+    this.puffs = [];
     this.world.clearTransient();
   }
 
@@ -117,20 +119,26 @@ export class Effects {
     }
   }
 
-  dust(pos, count = 14, color = 0xd9ccb0) {
-    this.burst(pos, {
-      count,
-      colors: [color, 0xece4d2, 0xf5f0e6],
-      shape: 'sphere',
-      speed: 1.6,
-      up: 0.6,
-      gravity: -0.6,
-      size: [0.03, 0.07],
-      life: [0.35, 0.65],
-      drag: 3.5,
-      spread: 0.2,
-      grow: 1.4,
-    });
+  // Soft billowing puffs (dust, steam, smoke) drawn as camera-facing sprites.
+  puff(pos, { count = 6, color = 0xd9ccb0, size = 0.25, spread = 0.12, rise = 0.25, life = [0.6, 1.1], opacity = 0.45 } = {}) {
+    for (let i = 0; i < count; i++) {
+      const mat = new THREE.SpriteMaterial({ map: getGlowTexture(), color, transparent: true, opacity: 0, depthWrite: false });
+      const s = new THREE.Sprite(mat);
+      s.position.copy(pos).add(new THREE.Vector3(rand(-spread, spread), rand(0, spread * 0.5), rand(-spread, spread)));
+      s.scale.setScalar(size * 0.3);
+      this.layer.add(s);
+      this.puffs.push({ s, mat, t: 0, dur: rand(life[0], life[1]), size: size * rand(0.7, 1.3), rise: rise * rand(0.5, 1.2), drift: new THREE.Vector3(rand(-1, 1), 0, rand(-1, 1)).multiplyScalar(spread), opacity });
+    }
+  }
+
+  dust(pos, count = 14, color = 0xb8aa8e) {
+    this.puff(pos, { count: Math.max(2, Math.round(count / 3)), color, size: 0.22, spread: 0.1, rise: 0.15, opacity: 0.35 });
+  }
+
+  // Water bursting up: fine droplets plus a white spray mist.
+  splash(pos, power = 1) {
+    this.burst(pos, { count: Math.round(60 * power), colors: [0xcfe6f2, 0x8fb8cc, 0xffffff], shape: 'sphere', speed: 1.8 * power, up: 3 * power, size: [0.006, 0.016], life: [0.6, 1.1] });
+    this.puff(pos, { count: Math.round(5 * power), color: 0xe8f2f8, size: 0.35 * power, spread: 0.12, rise: 0.4, opacity: 0.4 });
   }
 
   sparks(pos, color = 0xffd34d, count = 18, speed = 4) {
@@ -144,13 +152,27 @@ export class Effects {
     else if (kind === 'fur') this.burst(pos, { ...base, count: 30 * power, shape: 'sphere', speed: 3.5, up: 2.5 });
     else if (kind === 'scale') this.burst(pos, { ...base, count: 30 * power, shape: 'shard', speed: 3.5, up: 2.5 });
     else if (kind === 'water') {
-      this.burst(pos, { ...base, count: 34 * power, shape: 'sphere', colors: [0x2a86d8, 0x8fd3ff, 0xffffff], speed: 3, up: 3.5, size: [0.03, 0.07] });
+      this.splash(pos, power);
     } else if (kind === 'shard') this.burst(pos, { ...base, count: 28 * power, shape: 'shard', speed: 4, up: 2.5 });
     else this.burst(pos, { ...base, count: 26 * power, shape: 'cube', speed: 3, up: 2 });
   }
 
   step(dt) {
     if (dt <= 0) return;
+    this.puffs = this.puffs.filter((p) => {
+      p.t += dt;
+      const k = p.t / p.dur;
+      if (k >= 1) {
+        p.s.removeFromParent();
+        p.mat.dispose();
+        return false;
+      }
+      p.s.scale.setScalar(p.size * (0.3 + 0.7 * Math.sqrt(k)));
+      p.s.position.y += p.rise * dt;
+      p.s.position.addScaledVector(p.drift, dt);
+      p.mat.opacity = p.opacity * Math.min(1, k * 6) * (1 - k);
+      return true;
+    });
     const keep = [];
     for (const p of this.particles) {
       p.life -= dt;

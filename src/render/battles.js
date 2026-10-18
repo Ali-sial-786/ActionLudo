@@ -92,6 +92,8 @@ function finish(ctx, opts = {}) {
   ctx.D.impact(1.4);
   ctx.fx.victimBurst(c, DEBRIS[ctx.vic.animal], 0.6);
   ctx.gore.dismember(ctx.vic, { dir: ctx.dir, ...opts });
+  // the killer is left blood-soaked around the mouth
+  for (let i = 0; i < 2; i++) ctx.gore.wound(ctx.atk, headPoint(ctx.atk).add(new THREE.Vector3(rand(-0.04, 0.04), -0.03, 0)), { size: 0.045 });
   ctx.onKill?.();
 }
 
@@ -107,8 +109,8 @@ async function eagle(ctx) {
     p.jaw.rotation.x = 0.5 * Math.sin(k * Math.PI);
   });
   // take off, out of frame
-  const stopTrack = D.track({ at: () => wpos(atk.model).setY(Math.min(wpos(atk.model).y, BOARD_Y + 2.2)), yaw: -20, pitch: -2, dist: 2.6, lift: 0.2 }, 5);
-  await anim.tween(0.8, (k) => {
+  const stopTrack = D.track({ at: () => wpos(atk.model).setY(Math.min(wpos(atk.model).y, BOARD_Y + 1.6)), yaw: -20, pitch: -2, dist: 2.6, lift: 0.2 }, 6);
+  await anim.tween(0.6, (k) => {
     p.setWings(1, Math.sin(k * 30) * 0.6);
     setZ(atk, lerp(0, -1.4, k), Ease.inQuad(k) * 5);
     atk.model.rotation.x = -0.5 * k;
@@ -145,7 +147,7 @@ async function eagle(ctx) {
   await struggle(ctx, vic, 0.35, 1);
   // carry it skyward, tearing with the beak
   p.talons.attach(vic.root);
-  const stopFollow = D.track({ at: () => bodyPoint(vic, 0.1), yaw: 35, pitch: 4, dist: 1.6, lift: 0.0 }, 6);
+  const stopFollow = D.track({ at: () => bodyPoint(vic, 0.1), yaw: 35, pitch: 4, dist: 1.8, lift: 0.15 }, 16);
   await Promise.all([
     anim.tween(0.9, (k) => {
       p.setWings(1, Math.sin(k * 26) * 0.7);
@@ -365,7 +367,7 @@ async function bear(ctx) {
   const hind = new THREE.Vector3(0, 0.02, -0.22);
   const base = new THREE.Vector3(0, 0.07, stand);
   // rears up, towering over the prey (low hero angle)
-  D.cut({ at: ctx.V, yaw: -20, pitch: 2, dist: 1.2, lift: 0.45, fov: 36 });
+  D.cut({ at: ctx.mid, yaw: 12, pitch: 2, dist: 1.8, lift: 0.6, fov: 38 });
   sfx.play('roar', { pitch: 0.6 });
   await anim.tween(0.9, (k) => {
     rotateAbout(atk, -1.2 * Ease.outCubic(k), hind, 1 + 0.25 * k, base);
@@ -508,7 +510,7 @@ async function shark(ctx) {
   const p = atk.parts;
   D.cut({ at: ctx.A, yaw: 40, pitch: 10, dist: 1.4, lift: 0.2, fov: 34 });
   sfx.play('splash');
-  fx.burst(ctx.A.clone().setY(BOARD_Y + 0.15), { count: 16, colors: [0x0f3d5c, 0x8fb8cc, 0xdfeef5], shape: 'sphere', speed: 1.6, up: 2.2, size: [0.02, 0.05] });
+  fx.splash(ctx.A.clone().setY(BOARD_Y + 0.15), 0.6);
   await anim.tween(0.5, (k) => {
     p.body.rotation.x = 0.9 * k;
     p.body.position.y = 0.19 - k * 0.75;
@@ -540,7 +542,7 @@ async function shark(ctx) {
     const r = 0.52 - k * 0.12;
     fin.position.set(ctx.V.x + Math.cos(a) * r, BOARD_Y + 0.17, ctx.V.z + Math.sin(a) * r);
     fin.rotation.y = -a;
-    if (Math.random() < 0.5) fx.burst(fin.position.clone().setY(BOARD_Y + 0.03), { count: 1, colors: [0xdfeef5, 0x9cc6da], shape: 'sphere', speed: 0.3, up: 0.3, gravity: 2, size: [0.02, 0.04], life: [0.3, 0.5] });
+    if (Math.random() < 0.5) fx.burst(fin.position.clone().setY(BOARD_Y + 0.03), { count: 3, colors: [0xdfeef5, 0x9cc6da], shape: 'sphere', speed: 0.4, up: 0.4, gravity: 3, size: [0.006, 0.012], life: [0.3, 0.5] });
     vic.model.rotation.y = look0 + Math.sin(k * 18) * 0.35;
     if (k > 0.7 && Math.random() < 0.1) sfx.play('heartbeat');
   });
@@ -554,10 +556,11 @@ async function shark(ctx) {
   p.body.rotation.x = 0;
   p.body.scale.setScalar(1.5);
   p.water.visible = false;
+  p.foam.visible = false;
   killcam(ctx, { at: ctx.V, yaw: 35, pitch: 4, dist: 1.6, lift: 0.7, fov: 34 }, 0.25, 0.9);
   sfx.play('splash');
   sfx.play('roar', { pitch: 0.5 });
-  fx.burst(ctx.V.clone().setY(BOARD_Y + 0.2), { count: 40, colors: [0x0f3d5c, 0x8fb8cc, 0xdfeef5], shape: 'sphere', speed: 2.4, up: 4.5, size: [0.03, 0.07], life: [0.8, 1.4] });
+  fx.splash(ctx.V.clone().setY(BOARD_Y + 0.2), 1.4);
   await anim.tween(0.32, (k) => {
     atk.model.position.y = lerp(-0.9, 0.85, Ease.outQuad(k));
     p.jaw.rotation.x = 1.1 * k;
@@ -598,6 +601,7 @@ async function shark(ctx) {
   atk.model.rotation.set(0, 0, 0);
   p.body.scale.setScalar(1);
   p.water.visible = true;
+  p.foam.visible = true;
   setZ(atk, dist, -0.5);
   await anim.tween(0.5, (k) => {
     atk.model.position.y = lerp(-0.5, 0.07, Ease.outCubic(k));
@@ -714,7 +718,7 @@ async function rhino(ctx) {
   for (let i = 0; i < 3; i++) {
     sfx.play('snort');
     const nose = atk.model.localToWorld(new THREE.Vector3(0, 0.28, 0.58));
-    fx.burst(nose, { count: 6, colors: [0xe8e8e8, 0xcfcfcf], shape: 'sphere', speed: 0.6, up: 0.4, gravity: -0.6, size: [0.03, 0.06], life: [0.4, 0.7], drag: 2, grow: 1.5 });
+    fx.puff(nose, { count: 4, color: 0xe8ecef, size: 0.18, spread: 0.05, rise: 0.12, opacity: 0.4 });
     await anim.tween(0.28, (k) => {
       p.legFL.rotation.x = -0.7 * Math.sin(k * Math.PI);
       p.head.rotation.x = 0.35 * Math.sin(k * Math.PI);
@@ -745,7 +749,7 @@ async function rhino(ctx) {
   const apex = ctx.V.clone().addScaledVector(ctx.dir, 0.7).setY(BOARD_Y + 1.8);
   const land = ctx.V.clone().addScaledVector(ctx.dir, 0.55).setY(BOARD_Y);
   sfx.play('whoosh', { dur: 0.7 });
-  const toss = D.track({ at: () => bodyPoint(vic, 0.0), yaw: 40, pitch: 0, dist: 1.9, lift: 0.0 }, 6);
+  const toss = D.track({ at: () => bodyPoint(vic, 0.0), yaw: 40, pitch: 2, dist: 2.1, lift: 0.0 }, 16);
   await anim.tween(0.6, (k) => {
     p.head.rotation.x = lerp(0.4, -0.8, Math.min(1, k * 3));
     vic.root.position.lerpVectors(v0, apex, Ease.outQuad(k));

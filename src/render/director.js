@@ -11,9 +11,12 @@ export class Director {
   constructor(world) {
     this.world = world;
     this.anim = world.anim;
+    this.scale = 1;
   }
 
-  begin(A, V) {
+  // `scale` pushes every shot further out for bulky animals.
+  begin(A, V, scale = 1) {
+    this.scale = scale;
     this.A = A.clone();
     this.V = V.clone();
     this.f = V.clone().sub(A).setY(0);
@@ -50,7 +53,7 @@ export class Director {
       .addScaledVector(this.f, Math.sin(y) * Math.cos(pt))
       .addScaledVector(UP, Math.sin(pt));
     const target = p.add(UP.clone().multiplyScalar(lift));
-    return { pos: target.clone().addScaledVector(dir, dist), target };
+    return { pos: target.clone().addScaledVector(dir, dist * this.scale), target };
   }
 
   // Hard cut.

@@ -17,6 +17,7 @@ import { Cage, unlockWithKey } from '../render/cage.js';
 import { BOARD_Y, finishSpot, squareWorld, yardCenter, yardSpot } from '../render/boardMesh.js';
 import { ATTACKS, makeContext, victimReacts } from '../render/battles.js';
 import { Director } from '../render/director.js';
+import { BULK } from '../render/animals.js';
 import { Gore } from '../render/gore.js';
 import { Chain, arcPoints, circlePoints } from '../render/chains.js';
 import { Ease, arc, clamp, lerp } from '../engine/anim.js';
@@ -387,6 +388,7 @@ export class GameController {
   async animateMove(move, result) {
     const view = this.views.get(move.token.id);
     view.busy = true;
+    view.clearWounds(); // last kill's blood washes off when it moves on
     if (move.kind === 'release') {
       await this.releaseFromCage(view);
     } else {
@@ -528,7 +530,7 @@ export class GameController {
 
     this.world.cinematic = true;
     const D = this.director;
-    D.begin(A, V);
+    D.begin(A, V, Math.max(BULK[atk.animal] ?? 1, BULK[vic.animal] ?? 1));
     const atkPlayer = atk.player;
     const vicPlayer = vic.player;
     this.hud.battleBanner(atkPlayer, vicPlayer);
