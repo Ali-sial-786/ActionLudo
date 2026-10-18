@@ -1,16 +1,18 @@
 :root {
-  --bg: #0d1230;
-  --panel: rgba(14, 18, 40, 0.82);
+  --bg: #0b0d14;
+  --panel: rgba(12, 13, 20, 0.84);
   --panel-solid: #141a3a;
   --border: rgba(255, 255, 255, 0.12);
   --text: #f3f4fb;
   --muted: #a9b0cf;
-  --accent: #ffcc33;
-  --accent-ink: #2a1600;
+  --accent: #e8b43a;
+  --accent-ink: #1e1200;
+  --blood: #b3121e;
   --danger: #ff5c5c;
-  --radius: 16px;
-  --font: 'Nunito', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --comic: 'Bangers', 'Impact', 'Arial Black', sans-serif;
+  --radius: 14px;
+  --font: 'Barlow', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --condensed: 'Barlow Condensed', 'Arial Narrow', sans-serif;
+  --comic: 'Anton', 'Impact', 'Arial Black', sans-serif;
 }
 
 * {
@@ -84,18 +86,18 @@ kbd {
 .logo {
   font-family: var(--comic);
   font-weight: 400;
-  letter-spacing: 3px;
-  font-size: clamp(42px, 8vw, 72px);
+  letter-spacing: 6px;
+  font-size: clamp(44px, 8vw, 78px);
   line-height: 1;
   margin: 0;
   text-align: center;
-  color: #fff;
-  text-shadow: 0 4px 0 #b3261e, 0 8px 18px rgba(0, 0, 0, 0.5);
+  color: #ece6dc;
+  text-shadow: 0 3px 0 #000, 0 10px 30px rgba(0, 0, 0, 0.7);
 }
 
 .logo span {
-  color: var(--accent);
-  text-shadow: 0 4px 0 #a15c00, 0 8px 18px rgba(0, 0, 0, 0.5);
+  color: var(--blood);
+  text-shadow: 0 3px 0 #2a0003, 0 0 24px rgba(179, 18, 30, 0.55);
 }
 
 .title {
@@ -159,14 +161,16 @@ kbd {
 }
 
 .btn.primary {
-  background: linear-gradient(180deg, #ffd84d, #ffb31a);
-  color: var(--accent-ink);
-  border-color: #ffdf70;
-  box-shadow: 0 6px 0 #b86e00, 0 10px 24px rgba(255, 180, 30, 0.35);
+  background: linear-gradient(180deg, #c8182a, #8a0b16);
+  color: #fff;
+  border-color: #e0303f;
+  box-shadow: 0 5px 0 #4a040a, 0 10px 24px rgba(179, 18, 30, 0.35);
+  letter-spacing: 1px;
+  text-transform: uppercase;
 }
 
 .btn.primary:hover:not(:disabled) {
-  background: linear-gradient(180deg, #ffe066, #ffbd33);
+  background: linear-gradient(180deg, #dc2232, #9a0e1a);
 }
 
 .btn.ghost {
@@ -313,9 +317,10 @@ kbd {
 .animal-info b {
   font-family: var(--comic);
   font-weight: 400;
-  letter-spacing: 1px;
-  font-size: 17px;
-  color: #fff;
+  letter-spacing: 1.5px;
+  font-size: 16px;
+  color: #e9e2d8;
+  text-transform: uppercase;
 }
 
 .rules {
@@ -353,8 +358,8 @@ kbd {
 .arena-vs {
   font-family: var(--comic);
   font-size: 44px;
-  color: var(--accent);
-  text-shadow: 0 3px 0 #a15c00;
+  color: var(--blood);
+  text-shadow: 0 2px 0 #000, 0 0 16px rgba(179, 18, 30, 0.6);
 }
 
 .arena-side h3 {
@@ -560,9 +565,10 @@ kbd {
 }
 
 .ff {
-  position: absolute;
+  position: fixed;
+  z-index: 14;
   right: 14px;
-  bottom: calc(96px + env(safe-area-inset-bottom));
+  bottom: calc(3vh + env(safe-area-inset-bottom));
   pointer-events: auto;
   background: var(--panel);
   backdrop-filter: blur(8px);
@@ -596,48 +602,119 @@ kbd {
 
 .banner .side {
   font-family: var(--comic);
-  font-size: clamp(22px, 4.5vw, 40px);
-  letter-spacing: 1px;
+  font-size: clamp(20px, 4vw, 36px);
+  letter-spacing: 2px;
+  text-transform: uppercase;
   padding: 6px 18px;
-  border-radius: 14px;
-  background: var(--c);
-  color: #fff;
-  text-shadow: 0 3px 0 rgba(0, 0, 0, 0.35);
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.4);
+  color: #f2ede6;
+  background: rgba(8, 8, 12, 0.85);
+  border-bottom: 4px solid var(--c);
+  text-shadow: 0 2px 0 #000;
 }
 
 .banner .side.a {
-  animation: slideL 0.45s cubic-bezier(0.2, 1.4, 0.4, 1) both;
+  animation: slideL 0.5s cubic-bezier(0.2, 1, 0.3, 1) both;
 }
 
 .banner .side.b {
-  animation: slideR 0.45s cubic-bezier(0.2, 1.4, 0.4, 1) both;
+  animation: slideR 0.5s cubic-bezier(0.2, 1, 0.3, 1) both;
 }
 
 .banner .vs {
   font-family: var(--comic);
-  font-size: clamp(30px, 6vw, 56px);
-  color: var(--accent);
-  text-shadow: 0 4px 0 #a15c00, 0 0 20px rgba(255, 200, 50, 0.6);
-  animation: zoomIn 0.5s 0.2s cubic-bezier(0.2, 1.6, 0.4, 1) both;
+  font-size: clamp(26px, 5vw, 46px);
+  color: var(--blood);
+  text-shadow: 0 2px 0 #000, 0 0 18px rgba(179, 18, 30, 0.7);
+  animation: zoomIn 0.5s 0.2s cubic-bezier(0.2, 1, 0.3, 1) both;
 }
 
-.banner .move {
-  margin-top: 10px;
+.banner.kill {
+  top: auto;
+  bottom: calc(12vh + 18px);
+}
+
+.kill-card {
+  text-align: center;
+  animation: slam 0.35s cubic-bezier(0.2, 1, 0.3, 1) both;
+}
+
+.kill-move {
   font-family: var(--comic);
-  font-size: clamp(22px, 4vw, 34px);
-  letter-spacing: 2px;
-  color: #fff;
-  text-shadow: 0 3px 0 #000, 0 0 16px rgba(255, 80, 60, 0.8);
-  animation: zoomIn 0.45s 0.45s both;
+  font-size: clamp(40px, 8vw, 84px);
+  letter-spacing: 6px;
+  line-height: 1;
+  color: #e9e2d8;
+  text-shadow: 0 3px 0 #000, 0 0 30px rgba(179, 18, 30, 0.9);
 }
 
-.banner.result .move {
-  color: var(--accent);
+.kill-line {
+  margin-top: 6px;
+  display: inline-block;
+  font-family: var(--condensed);
+  font-weight: 700;
+  font-size: clamp(16px, 2.6vw, 22px);
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: #fff;
+  padding: 4px 14px;
+  background: var(--blood);
+  border-left: 6px solid var(--c);
 }
 
 .banner.out {
   animation: fadeOut 0.4s forwards;
+}
+
+/* cinematic letterbox during fights */
+.letterbox-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  height: 0;
+  background: #000;
+  z-index: 11;
+  pointer-events: none;
+  transition: height 0.5s cubic-bezier(0.3, 0, 0.2, 1);
+}
+
+.letterbox-bar.top {
+  top: 0;
+}
+
+.letterbox-bar.bottom {
+  bottom: 0;
+}
+
+body.letterbox .letterbox-bar {
+  height: 11vh;
+}
+
+body.letterbox .hud-top,
+body.letterbox .hud-bottom {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.hud-top,
+.hud-bottom {
+  transition: opacity 0.4s;
+}
+
+.toggle {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 0;
+  font-weight: 700;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.toggle input {
+  accent-color: var(--blood);
+  width: 18px;
+  height: 18px;
 }
 
 .toast {
@@ -647,8 +724,9 @@ kbd {
   transform: translateX(-50%) translateY(20px);
   padding: 10px 20px;
   border-radius: 999px;
-  background: rgba(255, 204, 51, 0.95);
-  color: var(--accent-ink);
+  background: rgba(20, 20, 26, 0.92);
+  color: #f2ede6;
+  border: 1px solid rgba(179, 18, 30, 0.7);
   font-weight: 900;
   font-size: 16px;
   opacity: 0;
@@ -750,6 +828,19 @@ kbd {
   to {
     transform: none;
     opacity: 1;
+  }
+}
+
+@keyframes slam {
+  from {
+    transform: scale(1.8);
+    opacity: 0;
+    filter: blur(6px);
+  }
+  to {
+    transform: none;
+    opacity: 1;
+    filter: none;
   }
 }
 

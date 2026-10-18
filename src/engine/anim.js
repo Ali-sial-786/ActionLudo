@@ -45,11 +45,13 @@ export class Animator {
     this.tasks = new Set();
     this.updaters = new Set();
     this.timeScale = 1;
+    // Extra multiplier for slow-motion moments (driven by World).
+    this.slow = 1;
     this.time = 0;
   }
 
   update(rawDt) {
-    const dt = Math.min(rawDt, 0.1) * this.timeScale;
+    const dt = Math.min(rawDt, 0.1) * this.timeScale * this.slow;
     this.time += dt;
     for (const task of [...this.tasks]) {
       if (!this.tasks.has(task)) continue;

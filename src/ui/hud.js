@@ -292,13 +292,18 @@ export class Hud {
       node.style.setProperty('--c', COLORS[p.seat].css);
       return node;
     };
-    this.showBanner([el('div', { className: 'row' }, [side('a', atk, a), el('span', { className: 'vs', textContent: 'VS' }), side('b', vic, v)]), el('div', { className: 'move', textContent: `${a.move}!` })], 2300);
+    this.showBanner([el('div', { className: 'row' }, [side('a', atk, a), el('span', { className: 'vs', textContent: 'VS' }), side('b', vic, v)])], 1800);
   }
 
-  battleResult(atk, vic) {
+  // Brutal title card at the moment of the kill.
+  killTitle(atk, vic) {
     const a = animalById(atk.animal);
-    const v = animalById(vic.animal);
-    this.showBanner([el('div', { className: 'move', textContent: `${a.emoji} ${a.name} ${a.verb} ${v.name} ${v.emoji}` })], 1800, 'result');
+    const card = el('div', { className: 'kill-card' }, [
+      el('div', { className: 'kill-move', textContent: a.move.toUpperCase() }),
+      el('div', { className: 'kill-line', textContent: `${atk.name} ${a.verb} ${vic.name}` }),
+    ]);
+    card.style.setProperty('--c', COLORS[atk.seat].css);
+    this.showBanner([card], 2400, 'kill');
   }
 
   showBanner(children, ms, extra = '') {
@@ -335,6 +340,21 @@ export class Hud {
   // ---------------------------------------------------------------- wiring
   bind() {
     const h = this.h;
+    const gore = $('opt-gore');
+    try {
+      gore.checked = localStorage.getItem('action-ludo-gore') !== 'off';
+    } catch {
+      /* storage unavailable */
+    }
+    gore.onchange = () => {
+      try {
+        localStorage.setItem('action-ludo-gore', gore.checked ? 'on' : 'off');
+      } catch {
+        /* storage unavailable */
+      }
+      h.onGore?.(gore.checked);
+    };
+    h.onGore?.(gore.checked);
     $('btn-start').onclick = () => h.onStart(this.players());
     $('btn-arena').onclick = () => h.onArenaOpen();
     $('btn-arena-back').onclick = () => h.onArenaBack();

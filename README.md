@@ -1,25 +1,27 @@
 # 🎲 Action Ludo
 
-Classic Ludo in 3D — except every capture is an animal fight.
+Classic Ludo in 3D — except every capture is a brutal, cinematic kill.
 
-Each player picks a **colour** and an **animal**. Pieces move by normal Ludo rules with a fair die, but when you land on an opponent your animal attacks: the loser is torn apart, its pieces snap back together, chains shoot out from its cage and drag it back home, and the cage slams shut. Roll a **6** and a golden key flies in, unlocks a cage, and the animal leaps onto the board.
+Each player picks a **colour** and an **animal**. Pieces move by normal Ludo rules with a fair die, but when you land on an opponent the game cuts to a kill-cam: the lights drop, letterbox bars slide in, and your animal hunts its prey in slow-motion close-ups. Blood sprays and stains the board, wounds open, heads and limbs are torn off and bodies are ripped in half. The mangled carcass is then chained and dragged back to its cage, leaving a smeared blood trail, and the cage slams shut. Roll a **6** and a golden key unlocks a cage so the animal can leap back onto the board.
+
+> Contains graphic animal violence. Untick **Blood & gore** on the main menu for a bloodless version.
 
 ## The 10 animals
 
 | Animal | Finishing move | What happens |
 | --- | --- | --- |
-| 🦅 Eagle | **Sky Shred** | Vanishes into the sky, dive-bombs, carries the prey up and tears it apart mid-air |
-| 🐅 Tiger | **Pounce & Maul** | Crouch, butt-wiggle, pounce, then a flurry of glowing claw slashes |
-| 🐺 Wolf | **Pack Ambush** | Howls up two ghost wolves; the pack plays tug-of-war with the prey |
-| 🐻 Bear | **Pancake Slam** | Rears up to double size and body-slams the prey flat |
-| 🐍 Cobra | **Coil & Venom** | Crushing coils spiral up the prey, then a toxic bite turns it green |
-| 🦈 Shark | **Deep Strike** | A whirlpool opens under the prey, a fin circles… then it erupts jaws-first |
-| 🦍 Gorilla | **Ground Pound** | Chest-beats, hoists the prey overhead and pile-drives it twice |
-| 🦏 Rhino | **Stampede** | Paws the ground, charges and horn-launches the prey into the air |
-| 🦂 Scorpion | **Death Sting** | Pins the prey in its pincers and stings until it swells and pops |
-| 🐊 Crocodile | **Death Roll** | Snaps its jaws shut and spins the prey in a brutal death roll |
+| 🦅 Eagle | **Sky Shred** | Dives talons-first, carries the prey into the sky, tears at it with its beak and rips it in half |
+| 🐅 Tiger | **Pounce & Maul** | Stalks low, slow-motion pounce, crushes the throat, head-shakes and claw-rakes it open |
+| 🐺 Wolf | **Pack Ambush** | Howls in two more wolves; three sets of jaws pull the prey apart |
+| 🐻 Bear | **Maul & Crush** | Rears up, rakes with its claws, drops its full weight and rips the carcass apart |
+| 🐍 Cobra | **Strike & Constrict** | Fangs to the neck, venom blackens the flesh, coils crush bones until it bursts |
+| 🦈 Shark | **Deep Strike** | Circles under a black pool, erupts jaws-first, thrashes the water red and bites it in two |
+| 🦍 Gorilla | **Pulverize** | Hoists the prey overhead, pile-drives it, pounds it with both fists and tears it apart |
+| 🦏 Rhino | **Gore & Trample** | Charges, impales it on its horn, tosses the body and stamps it into the board |
+| 🦂 Scorpion | **Death Sting** | Pins it in its pincers, hammers the stinger home until it convulses, then rips it apart |
+| 🐊 Crocodile | **Death Roll** | Clamps down, spins in a blood-flinging death roll and thrashes the body apart |
 
-The attacker decides the move; the victim decides what it breaks into (feathers, fur, scales, water, shell). Every one of the 100 matchups plays out a little differently. Use **⚔ Battle Arena** on the main menu to watch any matchup without playing a game.
+The attacker decides the kill; the victim's own anatomy is what gets torn off (an eagle loses wings, a scorpion its pincers and tail, a cobra its whole neck). Use **⚔ Battle Arena** on the main menu to watch any matchup without playing a game.
 
 ## Rules
 
@@ -38,7 +40,7 @@ The die uses `crypto.getRandomValues` with rejection sampling, so every face has
 - **Roll:** click the hovering die, press the **Roll** button, or hit <kbd>Space</kbd>.
 - **Move:** click a glowing animal (hover shows where it will land).
 - **Camera:** drag to orbit, scroll or pinch to zoom, 🎥 resets the view.
-- **1× / 2× / 3×** changes animation speed; during a battle, **⏩ Fast-forward** (or <kbd>Space</kbd>) speeds through it. 🔊 toggles sound.
+- **1× / 2× / 3×** changes animation speed; during a kill, **⏩ Fast-forward** (or <kbd>Space</kbd>) speeds through it and skips the slow motion. 🔊 toggles sound.
 
 Any seat can be **Human**, **CPU** or **Off** (2–4 players). Several humans can share one device and take turns.
 
@@ -56,8 +58,10 @@ The build uses relative paths, so `dist/` can be hosted from any static host or 
 
 ## How it's built
 
-- **Three.js** for rendering. Everything is procedural: the board, cages, key, chains, dice textures and all ten animals are built from primitives in code. There are no model or image assets.
-- **WebAudio** synthesises every sound effect at runtime (roars, screeches, chain rattles, dice clatter…).
+- **Three.js** for rendering. Everything is procedural: the board, cages, key, chains, dice and all ten animals are built in code, with fur, stripes, scales and hide painted onto canvas textures at startup. There are no model or image assets.
+- Kill-cam post-processing: depth of field, a desaturated colour grade with vignette, film grain and a red impact flash, plus dramatic spot/red rim lighting during fights.
+- Gore: instanced blood droplets that splat into stains, spreading pools and drag smears, wounds stuck to the body, and dismemberment where torsos are split with clipping planes to show the flesh inside.
+- **WebAudio** synthesises every sound effect at runtime (roars, bone crunches, tearing flesh, chain rattles, dice clatter…).
 - **Vite** for dev server and bundling.
 
 ```
@@ -67,12 +71,15 @@ src/
   game/ai.js          CPU move scoring
   game/controller.js  turn loop, input, movement, battle → chain → cage sequences
   render/animals.js   the 10 procedural animals with named, animatable parts
-  render/battles.js   one attack choreography per animal
-  render/effects.js   particles, shockwaves, comic text, rip-apart & reassemble
+  render/textures.js  procedural fur / stripe / scale / skin / feather textures
+  render/battles.js   one kill choreography (with camera shots) per animal
+  render/director.js  kill-cam shot language: cuts, tracking, orbits, slow motion
+  render/gore.js      blood droplets, stains, wounds, dismemberment
+  render/effects.js   dust, water, sparks, shockwaves
   render/chains.js    instanced chain links along any path
   render/cage.js      cages, padlocks and the golden key
   render/dice.js      3D die with bounce-and-settle roll
-  render/world.js     renderer, lights, camera moves, screen shake
+  render/world.js     renderer, lights, post-processing, camera moves, screen shake
   ui/hud.js           setup screen, arena, HUD, banners
 tests/rules.test.js   node:test suite for the rules and AI
 ```

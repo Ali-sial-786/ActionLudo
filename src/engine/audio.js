@@ -33,7 +33,28 @@ class Sfx {
     return this.ctx && !this.muted;
   }
 
-  tone({ type = 'sine', freq = 440, to = null, dur = 0.2, vol = 0.3, delay = 0, attack = 0.005, vibrato = 0 }) {
+  shaper(amount) {
+    this.shapers ??= new Map();
+    if (!this.shapers.has(amount)) {
+      const ws = this.ctx.createWaveShaper();
+      const n = 1024;
+      const curve = new Float32Array(n);
+      for (let i = 0; i < n; i++) {
+        const x = (i / (n - 1)) * 2 - 1;
+        curve[i] = ((1 + amount) * x) / (1 + amount * Math.abs(x));
+      }
+      ws.curve = curve;
+      ws.connect(this.master);
+      this.shapers.set(amount, ws);
+    }
+    return this.shapers.get(amount);
+  }
+
+  out(dist) {
+    return dist ? this.shaper(dist) : this.master;
+  }
+
+  tone({ type = 'sine', freq = 440, to = null, dur = 0.2, vol = 0.3, delay = 0, attack = 0.005, vibrato = 0, am = 0, dist = 0 }) {
     if (!this.ready) return;
     const t0 = this.ctx.currentTime + delay;
     const osc = this.ctx.createOscillator();
@@ -53,12 +74,26 @@ class Sfx {
     g.gain.setValueAtTime(0.0001, t0);
     g.gain.exponentialRampToValueAtTime(vol, t0 + attack);
     g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-    osc.connect(g).connect(this.master);
+    let node = osc.connect(g);
+    if (am) {
+      // amplitude rumble, e.g. a growl's rattle
+      const trem = this.ctx.createGain();
+      const lfo = this.ctx.createOscillator();
+      const depth = this.ctx.createGain();
+      lfo.frequency.value = am;
+      depth.gain.value = 0.5;
+      trem.gain.value = 0.5;
+      lfo.connect(depth).connect(trem.gain);
+      lfo.start(t0);
+      lfo.stop(t0 + dur + 0.05);
+      node = node.connect(trem);
+    }
+    node.connect(this.out(dist));
     osc.start(t0);
     osc.stop(t0 + dur + 0.05);
   }
 
-  noise({ dur = 0.2, vol = 0.3, filter = 'lowpass', freq = 1200, to = null, q = 1, delay = 0, attack = 0.005 }) {
+  noise({ dur = 0.2, vol = 0.3, filter = 'lowpass', freq = 1200, to = null, q = 1, delay = 0, attack = 0.005, dist = 0 }) {
     if (!this.ready) return;
     const t0 = this.ctx.currentTime + delay;
     const src = this.ctx.createBufferSource();
@@ -73,7 +108,7 @@ class Sfx {
     g.gain.setValueAtTime(0.0001, t0);
     g.gain.exponentialRampToValueAtTime(vol, t0 + attack);
     g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-    src.connect(f).connect(g).connect(this.master);
+    src.connect(f).connect(g).connect(this.out(dist));
     src.start(t0, Math.random() * 0.5);
     src.stop(t0 + dur + 0.05);
   }
@@ -98,34 +133,68 @@ const SOUNDS = {
   land: (s) => s.noise({ dur: 0.08, vol: 0.18, freq: 600 }),
   whoosh: (s, { dur = 0.4 } = {}) => s.noise({ dur, vol: 0.35, filter: 'bandpass', freq: 400, to: 2400, q: 1.5, attack: dur * 0.6 }),
   thud: (s, { power = 1 } = {}) => {
-    s.tone({ type: 'sine', freq: 140, to: 40, dur: 0.35, vol: 0.6 * power });
-    s.noise({ dur: 0.25, vol: 0.4 * power, freq: 700, to: 100 });
+    s.tone({ type: 'sine', freq: 110, to: 32, dur: 0.45, vol: 0.7 * power, dist: 4 });
+    s.noise({ dur: 0.3, vol: 0.45 * power, freq: 600, to: 80 });
   },
   boom: (s) => {
     s.tone({ type: 'sine', freq: 90, to: 30, dur: 0.8, vol: 0.7 });
     s.noise({ dur: 0.7, vol: 0.5, freq: 1500, to: 80 });
   },
   rip: (s) => {
-    s.noise({ dur: 0.35, vol: 0.5, filter: 'highpass', freq: 900, to: 3000, q: 0.7 });
-    s.tone({ type: 'sawtooth', freq: 300, to: 90, dur: 0.3, vol: 0.15 });
+    SOUNDS.tear(s);
+    SOUNDS.crunch(s, { delay: 0.05 });
+    SOUNDS.splatter(s, { delay: 0.1 });
   },
-  slash: (s, { delay = 0 } = {}) => s.noise({ dur: 0.12, vol: 0.4, filter: 'bandpass', freq: 3000, to: 900, q: 2, delay }),
+  slash: (s, { delay = 0 } = {}) => {
+    s.noise({ dur: 0.12, vol: 0.4, filter: 'bandpass', freq: 3200, to: 800, q: 2, delay });
+    SOUNDS.squelch(s, { delay: delay + 0.04 });
+  },
   roar: (s, { pitch = 1 } = {}) => {
-    s.tone({ type: 'sawtooth', freq: 160 * pitch, to: 80 * pitch, dur: 0.9, vol: 0.28, attack: 0.08, vibrato: 12 });
-    s.noise({ dur: 0.9, vol: 0.25, freq: 900 * pitch, to: 300, attack: 0.1 });
+    s.tone({ type: 'sawtooth', freq: 110 * pitch, to: 62 * pitch, dur: 1.1, vol: 0.32, attack: 0.06, am: 31, dist: 40 });
+    s.tone({ type: 'square', freq: 55 * pitch, to: 38 * pitch, dur: 1.1, vol: 0.22, attack: 0.08, am: 23, dist: 20 });
+    s.noise({ dur: 1.0, vol: 0.32, filter: 'bandpass', freq: 700 * pitch, to: 260, q: 1.2, attack: 0.08, dist: 10 });
+  },
+  growl: (s, { pitch = 1, dur = 0.9 } = {}) => {
+    s.tone({ type: 'sawtooth', freq: 78 * pitch, to: 70 * pitch, dur, vol: 0.26, attack: 0.1, am: 27, dist: 30 });
+    s.noise({ dur, vol: 0.18, filter: 'bandpass', freq: 420 * pitch, q: 2, attack: 0.1 });
   },
   screech: (s) => {
-    s.tone({ type: 'sawtooth', freq: 2400, to: 1300, dur: 0.6, vol: 0.12, attack: 0.03, vibrato: 90 });
-    s.tone({ type: 'sine', freq: 3200, to: 1800, dur: 0.6, vol: 0.12, attack: 0.03, vibrato: 120 });
+    s.tone({ type: 'sawtooth', freq: 2300, to: 1250, dur: 0.7, vol: 0.13, attack: 0.03, vibrato: 110, dist: 25 });
+    s.tone({ type: 'square', freq: 3100, to: 1700, dur: 0.6, vol: 0.06, attack: 0.03, vibrato: 140 });
+    s.noise({ dur: 0.6, vol: 0.12, filter: 'highpass', freq: 3000 });
   },
   howl: (s) => {
-    s.tone({ type: 'sine', freq: 420, to: 760, dur: 0.5, vol: 0.25, attack: 0.2, vibrato: 8 });
-    s.tone({ type: 'sine', freq: 760, to: 380, dur: 0.9, vol: 0.25, delay: 0.5, vibrato: 8 });
+    s.tone({ type: 'sawtooth', freq: 380, to: 700, dur: 0.6, vol: 0.12, attack: 0.25, vibrato: 7, dist: 6 });
+    s.tone({ type: 'sine', freq: 700, to: 330, dur: 1.1, vol: 0.22, delay: 0.55, vibrato: 7 });
+  },
+  crunch: (s, { delay = 0 } = {}) => {
+    for (let i = 0; i < 5; i++) s.noise({ dur: 0.035, vol: 0.5, filter: 'bandpass', freq: 1400 + Math.random() * 2200, q: 3, delay: delay + i * 0.028 + Math.random() * 0.01 });
+    s.tone({ type: 'sine', freq: 120, to: 45, dur: 0.22, vol: 0.5, delay });
+  },
+  tear: (s, { delay = 0 } = {}) => {
+    s.noise({ dur: 0.45, vol: 0.45, filter: 'bandpass', freq: 700, to: 2600, q: 0.9, delay, dist: 8 });
+    for (let i = 0; i < 6; i++) s.noise({ dur: 0.05, vol: 0.3, filter: 'bandpass', freq: 500 + Math.random() * 500, q: 4, delay: delay + i * 0.06 });
+  },
+  squelch: (s, { delay = 0 } = {}) => {
+    s.noise({ dur: 0.18, vol: 0.4, filter: 'bandpass', freq: 380, to: 900, q: 6, delay });
+    s.tone({ type: 'sine', freq: 180, to: 90, dur: 0.12, vol: 0.25, delay });
+  },
+  splatter: (s, { delay = 0 } = {}) => {
+    for (let i = 0; i < 8; i++) s.noise({ dur: 0.06, vol: 0.22, filter: 'bandpass', freq: 600 + Math.random() * 900, q: 5, delay: delay + Math.random() * 0.4 });
+  },
+  heartbeat: (s) => {
+    s.tone({ type: 'sine', freq: 60, to: 40, dur: 0.18, vol: 0.55 });
+    s.tone({ type: 'sine', freq: 55, to: 38, dur: 0.2, vol: 0.45, delay: 0.24 });
+  },
+  slowmo: (s) => {
+    s.noise({ dur: 1.0, vol: 0.35, filter: 'lowpass', freq: 1800, to: 120, attack: 0.02 });
+    s.tone({ type: 'sine', freq: 140, to: 32, dur: 1.2, vol: 0.45 });
   },
   hiss: (s) => s.noise({ dur: 0.7, vol: 0.3, filter: 'highpass', freq: 5000, q: 0.5, attack: 0.1 }),
   bite: (s) => {
-    s.noise({ dur: 0.06, vol: 0.5, filter: 'bandpass', freq: 1500, q: 4 });
-    s.tone({ type: 'square', freq: 160, to: 60, dur: 0.1, vol: 0.2 });
+    s.noise({ dur: 0.05, vol: 0.5, filter: 'bandpass', freq: 1700, q: 4 });
+    s.tone({ type: 'sine', freq: 140, to: 50, dur: 0.12, vol: 0.4 });
+    SOUNDS.squelch(s, { delay: 0.03 });
   },
   splash: (s) => {
     s.noise({ dur: 0.6, vol: 0.45, freq: 3000, to: 300, attack: 0.01 });
@@ -142,8 +211,9 @@ const SOUNDS = {
     s.noise({ dur: 0.08, vol: 0.3, filter: 'highpass', freq: 3000, delay });
   },
   pop: (s) => {
-    s.tone({ type: 'sine', freq: 600, to: 80, dur: 0.2, vol: 0.5 });
-    s.noise({ dur: 0.3, vol: 0.4, freq: 2000, to: 200 });
+    s.tone({ type: 'sine', freq: 240, to: 50, dur: 0.25, vol: 0.5, dist: 6 });
+    SOUNDS.splatter(s);
+    SOUNDS.squelch(s);
   },
   pinch: (s, { delay = 0 } = {}) => s.noise({ dur: 0.05, vol: 0.4, filter: 'bandpass', freq: 4000, q: 5, delay }),
   chain: (s, { dur = 1 } = {}) => {

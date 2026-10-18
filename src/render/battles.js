@@ -4,24 +4,19 @@ import { DEBRIS, createAnimal } from './animals.js';
 import { BOARD_Y } from './boardMesh.js';
 
 // Each attack receives a context:
-//   A, V      world positions (board level) of attacker and victim squares
-//   dir       unit vector A -> V (horizontal), dist = |V - A|
-//   atk, vic  TokenView instances. atk.root sits on A facing V, vic.root on V facing A.
-// Attacker model offsets are in the attacker's local frame: +z points at the victim, so (0, y, dist) is the victim.
-// Every attack ends with the victim torn apart (fx.ripApart) and the attacker model standing at (0, 0, dist).
+//   A, V       board-level world positions of attacker and victim squares, dir = A->V, dist = |V - A|
+//   atk, vic   TokenViews. atk.root sits on A facing V, vic.root on V facing A.
+//   D          camera Director (cuts, moves, tracking, orbit, slow-mo); gore = blood & dismemberment
+// Attacker model offsets are in the attacker's local frame (+z towards the victim, so (0, y, dist) is the victim).
+// Every attack ends with the victim dismembered and the attacker's model standing at (0, 0, dist).
 
-function vicCenter(ctx, y = 0.35) {
-  return ctx.V.clone().setY(BOARD_Y + y);
-}
+const UP = new THREE.Vector3(0, 1, 0);
 
-function wobble(ctx, view, dur, amount = 0.15, freq = 30) {
-  const base = view.model.rotation.z;
-  return ctx.anim.tween(dur, (k) => {
-    view.model.rotation.z = base + Math.sin(k * dur * freq) * amount * (1 - k * 0.5);
-  });
-}
+const wpos = (obj, out = new THREE.Vector3()) => obj.getWorldPosition(out);
+const bodyPoint = (view, y = 0.28) => wpos(view.model).add(new THREE.Vector3(0, y, 0));
+const headPoint = (view) => (view.parts.head ? wpos(view.parts.head) : bodyPoint(view, 0.45));
 
-function setModelZ(view, z, y = null) {
+function setZ(view, z, y = null) {
   view.model.position.z = z;
   if (y !== null) view.model.position.y = 0.07 + y;
 }
@@ -37,731 +32,939 @@ function rotateAbout(view, rotX, pivot, scale = 1, base = new THREE.Vector3(0, 0
   view.model.position.copy(base).add(pivot).sub(moved);
 }
 
-async function rip(ctx, opts = {}) {
-  const { fx, vic, sfx } = ctx;
-  const c = new THREE.Vector3();
-  vic.model.getWorldPosition(c);
-  c.y += 0.3;
-  sfx.play('rip');
-  fx.victimBurst(c, DEBRIS[vic.animal], opts.burst ?? 1);
-  fx.flash(c, { color: opts.flashColor ?? 0xffffff, size: 2.2 });
-  fx.ripApart(vic, opts);
-  ctx.world.shake(opts.shake ?? 0.35);
-  if (opts.word) {
-    fx.text(c.clone().add(new THREE.Vector3(0, 0.9, 0)), opts.word, { color: opts.wordColor ?? '#ffdd33', stroke: opts.stroke ?? '#2a0a00' });
-  }
+const LIMB_NAMES = ['legFL', 'legFR', 'legBL', 'legBR', 'armL', 'armR', 'legL', 'legR', 'wingL', 'wingR', 'clawL', 'clawR'];
+function limbsOf(view) {
+  const p = view.parts;
+  return LIMB_NAMES.map((n) => p[n]).filter(Boolean).concat(p.legs ?? []);
+}
+
+// Victim thrashes: legs kick, head jerks, body convulses. `fade` makes it die down (death throes).
+function struggle(ctx, view, dur, power = 1, fade = false) {
+  const limbs = limbsOf(view);
+  const rest = limbs.map((l) => l.rotation.clone());
+  const head = view.parts.head;
+  const h0 = head?.rotation.clone();
+  const m0 = view.model.rotation.clone();
+  return ctx.anim.tween(dur, (k) => {
+    const a = power * (fade ? 1 - k : 1);
+    const t = ctx.anim.time;
+    limbs.forEach((l, i) => (l.rotation.x = rest[i].x + Math.sin(t * 26 + i * 1.9) * 0.6 * a));
+    if (head) {
+      head.rotation.y = h0.y + Math.sin(t * 17) * 0.4 * a;
+      head.rotation.x = h0.x + Math.sin(t * 23) * 0.25 * a;
+    }
+    if (view.parts.jaw) view.parts.jaw.rotation.x = Math.abs(Math.sin(t * 13)) * 0.6 * a;
+    view.model.rotation.z = m0.z + Math.sin(t * 31) * 0.07 * a;
+    view.model.rotation.x = m0.x + Math.sin(t * 19) * 0.04 * a;
+  });
+}
+
+// Quadruped running gait.
+function gait(p, t, amp = 0.6) {
+  if (!p.legFL) return;
+  const s = Math.sin(t);
+  p.legFL.rotation.x = p.legBR.rotation.x = s * amp;
+  p.legFR.rotation.x = p.legBL.rotation.x = -s * amp;
+}
+
+// A wound with spurting blood, a red flash and a crunch.
+function hit(ctx, point, { dir = UP, count = 45, speed = 2.6, wound = 0.05, gash = 0, sound = 'bite', impact = 0.7, mist = 0.6 } = {}) {
+  ctx.gore.spray(point, dir, { count: Math.round(count * 1.8), speed, spread: 0.55, up: 0.6 });
+  if (mist) ctx.gore.mist(point, mist);
+  if (wound) ctx.gore.wound(ctx.vic, point, { size: wound, gash });
+  if (sound) ctx.sfx.play(sound);
+  ctx.D.impact(impact);
+}
+
+// Slow-motion close-up for the moment that matters.
+function killcam(ctx, spec, slow = 0.18, hold = 1.0) {
+  ctx.D.cut(spec);
+  ctx.D.slowmo(slow, hold);
+  ctx.sfx.play('slowmo');
+  ctx.sfx.play('heartbeat');
+}
+
+// The kill: the victim is torn apart.
+function finish(ctx, opts = {}) {
+  const c = bodyPoint(ctx.vic, 0.3);
+  ctx.sfx.play('rip');
+  ctx.sfx.play('crunch', { delay: 0.05 });
+  ctx.D.impact(1.4);
+  ctx.fx.victimBurst(c, DEBRIS[ctx.vic.animal], 0.6);
+  ctx.gore.dismember(ctx.vic, { dir: ctx.dir, ...opts });
+  ctx.onKill?.();
 }
 
 // ------------------------------------------------------------------ EAGLE: Sky Shred
 async function eagle(ctx) {
-  const { anim, atk, vic, fx, sfx, dist } = ctx;
+  const { anim, atk, vic, sfx, dist, D } = ctx;
   const p = atk.parts;
+  await D.move({ at: ctx.A, yaw: -40, pitch: 10, dist: 1.7, lift: 0.45, fov: 36 }, 0.5);
   sfx.play('screech');
-  // take off
-  await anim.tween(0.25, (k) => p.setWings(k), Ease.outCubic);
-  await anim.tween(0.85, (k) => {
+  await anim.tween(0.55, (k) => {
+    p.setWings(Ease.outCubic(k));
+    p.head.rotation.x = -0.5 * Math.sin(k * Math.PI);
+    p.jaw.rotation.x = 0.5 * Math.sin(k * Math.PI);
+  });
+  // take off, out of frame
+  const stopTrack = D.track({ at: () => wpos(atk.model).setY(Math.min(wpos(atk.model).y, BOARD_Y + 2.2)), yaw: -20, pitch: -2, dist: 2.6, lift: 0.2 }, 5);
+  await anim.tween(0.8, (k) => {
     p.setWings(1, Math.sin(k * 30) * 0.6);
-    setModelZ(atk, lerp(0, -1.5, k), Ease.inQuad(k) * 6);
+    setZ(atk, lerp(0, -1.4, k), Ease.inQuad(k) * 5);
     atk.model.rotation.x = -0.5 * k;
   });
-  // shadow circles the victim
-  const shadow = new THREE.Mesh(
-    new THREE.CircleGeometry(0.5, 24),
-    new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0, depthWrite: false }),
-  );
+  stopTrack();
+  // the prey looks up; a shadow grows over it
+  D.cut({ at: ctx.V, yaw: -30, pitch: 6, dist: 1.3, lift: 0.35, fov: 32 });
+  const shadow = new THREE.Mesh(new THREE.CircleGeometry(0.5, 24), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0, depthWrite: false }));
   shadow.rotation.x = -Math.PI / 2;
   shadow.position.copy(ctx.V).setY(BOARD_Y + 0.015);
   ctx.world.transient.add(shadow);
-  const lookUp = anim.tween(0.7, (k) => (vic.model.rotation.x = -0.5 * Math.sin(k * Math.PI)));
+  sfx.play('heartbeat');
+  sfx.play('growl', { pitch: 1.3, dur: 0.6 });
   await anim.tween(0.7, (k) => {
-    shadow.material.opacity = 0.45 * k;
-    shadow.scale.setScalar(1.6 - k * 0.8);
+    shadow.material.opacity = 0.5 * k;
+    shadow.scale.setScalar(1.8 - k);
+    if (vic.parts.head) vic.parts.head.rotation.x = -0.5 * k;
   });
-  await lookUp;
-  // dive
+  // dive — talons first
   sfx.play('whoosh', { dur: 0.35 });
-  const z0 = dist - 2.6;
-  await anim.tween(0.38, (k) => {
-    p.setWings(0.15, 0);
-    setModelZ(atk, lerp(z0, dist, k), lerp(5.5, 0.55, k));
-    atk.model.rotation.x = lerp(0.9, -0.1, k);
-    shadow.scale.setScalar(0.8 - k * 0.2);
+  D.cut({ at: ctx.V, yaw: 25, pitch: 14, dist: 1.6, lift: 0.4, fov: 34 });
+  await anim.tween(0.3, (k) => {
+    p.setWings(0.2);
+    setZ(atk, lerp(dist - 2.2, dist, k), lerp(4.5, 0.42, k));
+    atk.model.rotation.x = lerp(0.9, -0.35, k);
+    p.talons.rotation.x = -0.8 * k;
   }, Ease.inQuad);
   shadow.removeFromParent();
   shadow.geometry.dispose();
   shadow.material.dispose();
-  sfx.play('bite');
-  fx.burst(vicCenter(ctx, 0.5), { count: 12, colors: DEBRIS[vic.animal].colors, shape: 'sphere', speed: 2, size: [0.03, 0.05] });
-  ctx.world.shake(0.2);
-  // carry the victim skywards
+  // talons sink in
+  killcam(ctx, { at: ctx.V, yaw: 40, pitch: 16, dist: 1.05, lift: 0.4, fov: 30 }, 0.2, 0.7);
+  for (const s of [1, -1]) hit(ctx, bodyPoint(vic, 0.32).add(ctx.dir.clone().multiplyScalar(s * 0.08)), { count: 40, wound: 0.045, sound: 'crunch', impact: 0.9 });
+  await struggle(ctx, vic, 0.35, 1);
+  // carry it skyward, tearing with the beak
   p.talons.attach(vic.root);
-  await anim.tween(0.9, (k) => {
-    p.setWings(1, Math.sin(k * 28) * 0.7);
-    setModelZ(atk, dist, lerp(0.55, 2.3, Ease.outQuad(k)));
-    atk.model.rotation.x = lerp(-0.1, -0.3, k);
-    vic.model.rotation.z = Math.sin(k * 40) * 0.4;
-  });
+  const stopFollow = D.track({ at: () => bodyPoint(vic, 0.1), yaw: 35, pitch: 4, dist: 1.6, lift: 0.0 }, 6);
+  await Promise.all([
+    anim.tween(0.9, (k) => {
+      p.setWings(1, Math.sin(k * 26) * 0.7);
+      setZ(atk, dist, lerp(0.42, 1.9, Ease.outQuad(k)));
+      atk.model.rotation.x = lerp(-0.35, -0.15, k);
+      if (Math.random() < 0.5) ctx.gore.spray(bodyPoint(vic, 0.1), new THREE.Vector3(0, -1, 0), { count: 2, speed: 0.6, up: 0 });
+    }),
+    struggle(ctx, vic, 0.9, 1),
+  ]);
+  for (let i = 0; i < 3; i++) {
+    await anim.tween(0.12, (k) => (p.head.rotation.x = 0.9 * k));
+    hit(ctx, bodyPoint(vic, 0.35), { dir: new THREE.Vector3(rand(-1, 1), 0.8, rand(-1, 1)), count: 35, wound: 0.05, sound: 'tear', impact: 0.6 });
+    await anim.tween(0.18, (k) => {
+      p.head.rotation.x = 0.9 - 1.2 * k;
+      p.setWings(1, Math.sin(k * 8) * 0.5);
+    });
+  }
+  stopFollow();
   sfx.play('screech');
-  await anim.tween(0.35, (k) => {
-    p.setWings(1, 0.6 * k);
-    vic.model.scale.set(1 + k * 0.25, 1 - k * 0.15, 1 + k * 0.25);
-  });
-  ctx.world.scene.attach(vic.root);
-  await rip(ctx, { power: 2.4, up: 1.2, word: 'SHRED!', shake: 0.4 });
-  // land on the square
+  // rips it clean in two
+  killcam(ctx, { at: () => bodyPoint(vic, 0.15), yaw: 60, pitch: 6, dist: 1.4, lift: 0.0, fov: 32 }, 0.15, 1.3);
+  ctx.world.transient.attach(vic.root);
+  finish(ctx, { mode: 'halves', axis: 'z', power: 1.6, up: 0.4 });
+  await Promise.all([D.orbit({ at: bodyPoint(atk, 0.1), yaw: 60, pitch: 6, dist: 1.6, lift: -0.2 }, 150, 1.6), anim.tween(0.6, (k) => p.setWings(1, 0.6 * Math.sin(k * Math.PI)))]);
+  // glide down to the square
+  await D.move({ at: ctx.V, yaw: 30, pitch: 18, dist: 2.4, lift: 0.35, fov: 36 }, 0.6);
   await anim.tween(0.7, (k) => {
     p.setWings(1, Math.sin(k * 16) * 0.4 * (1 - k));
-    setModelZ(atk, dist, lerp(2.3, 0, Ease.inOutCubic(k)));
-    atk.model.rotation.x = lerp(-0.3, 0, k);
+    setZ(atk, dist, lerp(1.9, 0, Ease.inOutCubic(k)));
+    atk.model.rotation.x = lerp(-0.15, 0, k);
+    p.talons.rotation.x = -0.8 * (1 - k);
   });
-  await anim.tween(0.25, (k) => p.setWings(1 - k));
+  await anim.tween(0.3, (k) => p.setWings(1 - k));
 }
 
 // ------------------------------------------------------------------ TIGER: Pounce & Maul
 async function tiger(ctx) {
-  const { anim, atk, vic, fx, sfx, dist } = ctx;
+  const { anim, atk, vic, sfx, dist, D } = ctx;
   const p = atk.parts;
-  sfx.play('roar', { pitch: 0.9 });
-  // crouch & butt wiggle
-  await anim.tween(0.7, (k) => {
+  // stalk low, shoulder blades rolling
+  const stalk = D.track({ at: () => wpos(atk.model), yaw: -65, pitch: 5, dist: 1.5, lift: 0.35 }, 5);
+  ctx.world.setFov(34);
+  sfx.play('growl', { pitch: 0.8, dur: 1.3 });
+  await anim.tween(1.2, (k, raw) => {
     const c = Math.min(1, k * 3);
-    atk.model.scale.set(1 + 0.08 * c, 1 - 0.22 * c, 1 + 0.05 * c);
-    p.body.rotation.y = Math.sin(k * 40) * 0.12 * c;
-    p.tail.rotation.y = Math.sin(k * 25) * 0.8;
-    p.jaw.rotation.x = 0.5 * c;
+    atk.model.position.y = 0.07 - 0.07 * c;
+    setZ(atk, lerp(0, dist * 0.3, k));
+    p.head.rotation.x = 0.25 * c;
+    gait(p, raw * 9, 0.35);
+    p.tail.rotation.y = Math.sin(raw * 10) * 0.5;
   });
-  p.body.rotation.y = 0;
-  // pounce
-  sfx.play('whoosh', { dur: 0.3 });
+  stalk();
+  // the prey sees it
+  D.cut({ at: ctx.V, yaw: -30, pitch: 8, dist: 1.25, lift: 0.4, fov: 32 });
+  sfx.play('heartbeat');
+  await anim.tween(0.45, (k) => {
+    if (vic.parts.head) vic.parts.head.rotation.y = 0.4 * Math.sin(k * Math.PI * 2);
+  });
+  // POUNCE in slow motion
+  D.cut({ at: ctx.mid, yaw: 0, pitch: 6, dist: 2.0, lift: 0.5, fov: 34 });
+  D.slowmo(0.3, 0.5);
+  sfx.play('roar', { pitch: 0.85 });
   await anim.tween(0.42, (k) => {
-    atk.model.scale.set(1 - 0.05 * Math.sin(k * Math.PI), 1 + 0.15 * Math.sin(k * Math.PI), 1);
-    setModelZ(atk, lerp(0, dist - 0.25, k), arc(k, 1.1));
-    atk.model.rotation.x = lerp(-0.6, 0.35, k);
-    p.legFL.rotation.x = p.legFR.rotation.x = -1.2 * Math.sin(k * Math.PI);
+    setZ(atk, lerp(dist * 0.3, dist - 0.3, k), arc(k, 0.75));
+    atk.model.rotation.x = lerp(-0.5, 0.35, k);
+    p.legFL.rotation.x = p.legFR.rotation.x = -1.4 * Math.sin(k * Math.PI);
     p.legBL.rotation.x = p.legBR.rotation.x = 0.9 * Math.sin(k * Math.PI);
+    p.jaw.rotation.x = 0.7 * k;
   });
-  atk.model.scale.set(1, 1, 1);
-  atk.model.rotation.x = 0.15;
-  sfx.play('thud', { power: 0.6 });
-  ctx.world.shake(0.25);
-  await anim.tween(0.15, (k) => vic.model.scale.set(1 + 0.25 * k, 1 - 0.35 * k, 1 + 0.25 * k));
-  // flurry of claw swipes
-  for (let i = 0; i < 3; i++) {
-    const leg = i % 2 ? p.legFR : p.legFL;
+  sfx.play('thud', { power: 0.8 });
+  ctx.world.shake(0.15);
+  // prey slammed onto its side; teeth into the throat
+  await anim.tween(0.18, (k) => (vic.model.rotation.z = -1.3 * Ease.outQuad(k)));
+  killcam(ctx, { at: ctx.V, yaw: 55, pitch: 12, dist: 1.05, lift: 0.25, fov: 30 }, 0.25, 0.6);
+  await anim.tween(0.12, (k) => {
+    p.head.rotation.x = lerp(0, 0.7, k);
+    p.jaw.rotation.x = lerp(0.7, 0.1, k);
+  });
+  hit(ctx, headPoint(vic), { count: 60, wound: 0.06, sound: 'crunch', impact: 1 });
+  // head-shake the prey apart
+  const stopShake = D.track({ at: () => bodyPoint(vic, 0.15), yaw: 40, pitch: 14, dist: 1.2, lift: 0.1 }, 8);
+  await Promise.all([
+    anim.tween(1.0, (k, raw) => {
+      p.head.rotation.y = Math.sin(raw * 40) * 0.45;
+      if (Math.random() < 0.35) ctx.gore.spray(headPoint(vic), new THREE.Vector3(rand(-1, 1), 0.7, rand(-1, 1)), { count: 6, speed: 2 });
+      if (Math.random() < 0.06) sfx.play('squelch');
+    }),
+    struggle(ctx, vic, 1.0, 1.2, true),
+  ]);
+  // claw rakes
+  for (const s of [1, -1]) {
+    const leg = s > 0 ? p.legFL : p.legFR;
     sfx.play('slash');
-    fx.slashes(vicCenter(ctx, 0.4), { color: 0xff5530, angle: i % 2 ? 0.6 : -0.6 });
-    fx.burst(vicCenter(ctx, 0.4), { count: 8, colors: DEBRIS[vic.animal].colors, shape: 'sphere', speed: 2.5, size: [0.025, 0.05] });
-    ctx.world.shake(0.15);
-    await anim.tween(0.22, (k) => {
-      leg.rotation.x = -1.8 * Math.sin(k * Math.PI);
-      leg.rotation.z = (i % 2 ? 0.6 : -0.6) * Math.sin(k * Math.PI);
-      vic.model.rotation.z = (i % 2 ? -0.3 : 0.3) * Math.sin(k * Math.PI);
+    await anim.tween(0.2, (k) => {
+      leg.rotation.x = -1.6 * Math.sin(k * Math.PI);
+      leg.rotation.z = s * 0.5 * Math.sin(k * Math.PI);
     });
+    hit(ctx, bodyPoint(vic, 0.2), { dir: new THREE.Vector3(-s, 0.6, 0), count: 40, wound: 0.05, gash: 1, sound: null, impact: 0.7 });
   }
-  sfx.play('roar');
-  await anim.tween(0.2, (k) => {
-    p.legFL.rotation.x = p.legFR.rotation.x = -2 * k;
-    atk.model.rotation.x = lerp(0.15, -0.5, k);
+  stopShake();
+  // rip
+  killcam(ctx, { at: ctx.V, yaw: 42, pitch: 10, dist: 1.25, lift: 0.25, fov: 30 }, 0.16, 1.3);
+  await anim.tween(0.18, (k) => {
+    p.head.rotation.x = lerp(0.7, -0.5, k);
+    atk.model.rotation.x = lerp(0.35, -0.25, k);
   });
-  await rip(ctx, { power: 3.5, up: 2.2, dir: ctx.dir, dirPower: 1.5, word: 'MAULED!', shake: 0.45 });
+  finish(ctx, { mode: 'limbs', power: 2.2, up: 1.6 });
+  sfx.play('roar', { pitch: 0.8 });
+  await D.orbit({ at: ctx.V, yaw: 42, pitch: 10, dist: 1.4, lift: 0.25 }, 170, 1.7);
   await anim.tween(0.4, (k) => {
-    p.legFL.rotation.x = p.legFR.rotation.x = -2 * (1 - k);
-    atk.model.rotation.x = lerp(-0.5, 0, k);
-    setModelZ(atk, lerp(dist - 0.25, dist, k), 0);
-    p.jaw.rotation.x = 0.5 * (1 - k);
+    p.head.rotation.set(lerp(-0.5, 0, k), 0, 0);
+    atk.model.rotation.x = lerp(-0.25, 0, k);
+    setZ(atk, lerp(dist - 0.3, dist, k), 0);
   });
 }
 
 // ------------------------------------------------------------------ WOLF: Pack Ambush
 async function wolf(ctx) {
-  const { anim, atk, vic, fx, sfx, dist, world } = ctx;
+  const { anim, atk, vic, sfx, dist, world, D } = ctx;
   const p = atk.parts;
-  // howl
+  D.cut({ at: ctx.A, yaw: 45, pitch: 4, dist: 1.05, lift: 0.45, fov: 30 });
+  sfx.play('growl', { pitch: 1.1, dur: 1.0 });
+  await anim.tween(0.8, (k) => {
+    p.head.rotation.x = 0.25 * k;
+    p.jaw.rotation.x = 0.35 * Math.min(1, k * 2);
+    atk.model.position.y = 0.07 - 0.04 * k;
+  });
   sfx.play('howl');
   await anim.tween(0.9, (k) => {
-    const h = Math.sin(Math.min(1, k * 1.4) * Math.PI);
-    p.head.rotation.x = -1.0 * h;
-    p.jaw.rotation.x = 0.5 * h;
-    atk.model.rotation.x = -0.35 * h;
+    const h = Math.sin(Math.min(1, k * 1.3) * Math.PI);
+    p.head.rotation.x = 0.25 - 1.2 * h;
+    p.jaw.rotation.x = 0.4 * h;
   });
-  // summon two ghost wolves that flank the victim from behind, so the pack surrounds it
-  const ghosts = [];
+  // the rest of the pack charges in
   const side = new THREE.Vector3(-ctx.dir.z, 0, ctx.dir.x);
-  const ghostMat = new THREE.MeshStandardMaterial({ color: 0xbfe6ff, emissive: 0x4a90e0, emissiveIntensity: 0.9, transparent: true, opacity: 0, roughness: 0.3, flatShading: true });
+  const pack = [];
   for (const s of [1, -1]) {
     const g = createAnimal('wolf');
-    g.model.traverse((o) => {
-      if (o.isMesh) {
-        o.material = ghostMat;
-        o.castShadow = false;
-      }
-    });
-    const pos = ctx.V.clone().addScaledVector(ctx.dir, 1.1).addScaledVector(side, s * 0.95).setY(BOARD_Y + 0.07);
-    const bite = ctx.V.clone().addScaledVector(ctx.dir, 0.3).addScaledVector(side, s * 0.28).setY(BOARD_Y + 0.07);
-    const away = pos.clone().sub(ctx.V).setY(0).normalize();
-    g.model.position.copy(pos);
-    g.model.scale.setScalar(1.1);
-    g.model.lookAt(ctx.V.clone().setY(pos.y));
+    const from = ctx.V.clone().addScaledVector(ctx.dir, 2.2).addScaledVector(side, s * 2.0).setY(BOARD_Y + 0.07);
+    const bite = ctx.V.clone().addScaledVector(ctx.dir, 0.38).addScaledVector(side, s * 0.3).setY(BOARD_Y + 0.07);
+    g.model.position.copy(from);
+    g.model.lookAt(bite.clone().setY(from.y));
     world.transient.add(g.model);
-    ghosts.push({ ...g, pos, bite, away });
-    fx.burst(pos.clone().setY(BOARD_Y + 0.3), { count: 14, colors: [0x9fd8ff, 0xffffff], glow: true, speed: 1.5, up: 1, size: [0.02, 0.05], life: [0.4, 0.8] });
+    pack.push({ ...g, from, bite, away: bite.clone().sub(ctx.V).setY(0).normalize() });
   }
-  await anim.tween(0.45, (k) => (ghostMat.opacity = 0.8 * k));
-  // all three lunge
-  sfx.play('bite');
-  sfx.play('roar', { pitch: 1.4 });
-  await anim.tween(0.3, (k) => {
-    setModelZ(atk, lerp(0, dist - 0.45, k), arc(k, 0.3));
-    p.head.rotation.x = lerp(-0.6, 0.2, k);
-    p.jaw.rotation.x = 0.7 * Math.sin(k * Math.PI);
-    for (const gh of ghosts) {
-      gh.model.position.lerpVectors(gh.pos, gh.bite, k);
-      gh.model.position.y = gh.pos.y + arc(k, 0.3);
-      gh.parts.jaw.rotation.x = 0.7 * Math.sin(k * Math.PI);
+  D.cut({ at: ctx.V, yaw: 10, pitch: 22, dist: 2.6, lift: 0.3, fov: 36 });
+  sfx.play('roar', { pitch: 1.3 });
+  await anim.tween(0.65, (k, raw) => {
+    setZ(atk, lerp(0, dist - 0.42, k), 0);
+    gait(p, raw * 30, 0.6);
+    for (const w of pack) {
+      w.model.position.lerpVectors(w.from, w.bite, Ease.inQuad(k));
+      gait(w.parts, raw * 30 + 1, 0.6);
+    }
+  }, Ease.inQuad);
+  // all three bite at once
+  killcam(ctx, { at: ctx.V, yaw: 30, pitch: 18, dist: 1.25, lift: 0.3, fov: 30 }, 0.25, 0.6);
+  await anim.tween(0.12, (k) => {
+    for (const w of [{ parts: p }, ...pack]) {
+      w.parts.head.rotation.x = 0.5 * k;
+      w.parts.jaw.rotation.x = 0.6 * (1 - k);
     }
   });
-  ctx.world.shake(0.25);
-  sfx.play('bite');
-  // tug of war
-  await anim.tween(0.9, (k) => {
-    const tug = Math.sin(k * 26) * 0.06;
-    setModelZ(atk, dist - 0.45 - tug - k * 0.08, 0);
-    p.head.rotation.y = Math.sin(k * 30) * 0.25;
-    for (const gh of ghosts) {
-      gh.model.position.copy(gh.bite).addScaledVector(gh.away, k * 0.12 + tug);
-      gh.parts.head.rotation.y = Math.sin(k * 30 + gh.away.x) * 0.25;
+  hit(ctx, headPoint(vic), { count: 50, wound: 0.05, sound: 'crunch', impact: 1 });
+  for (const w of pack) hit(ctx, bodyPoint(vic, 0.25).addScaledVector(w.away, 0.12), { dir: w.away.clone().setY(0.6), count: 40, wound: 0.05, sound: 'bite', impact: 0.4 });
+  // tug of war — the prey is pulled three ways
+  const stop = D.track({ at: () => bodyPoint(vic, 0.1), yaw: 20, pitch: 30, dist: 1.5, lift: 0.0 }, 6);
+  sfx.play('growl', { pitch: 1.0, dur: 1.4 });
+  await Promise.all([
+    anim.tween(1.3, (k, raw) => {
+      const tug = Math.sin(raw * 22) * 0.05;
+      setZ(atk, dist - 0.42 - tug - k * 0.12, 0);
+      p.head.rotation.y = Math.sin(raw * 30) * 0.35;
+      for (const w of pack) {
+        w.model.position.copy(w.bite).addScaledVector(w.away, k * 0.16 + tug);
+        w.parts.head.rotation.y = Math.sin(raw * 30 + w.away.x) * 0.35;
+      }
+      vic.model.scale.set(1 + k * 0.18, 1 - k * 0.08, 1 + k * 0.2);
+      if (Math.random() < 0.4) ctx.gore.spray(bodyPoint(vic, 0.25), new THREE.Vector3(rand(-1, 1), 0.8, rand(-1, 1)), { count: 5, speed: 2 });
+      if (Math.random() < 0.05) sfx.play('tear');
+    }),
+    struggle(ctx, vic, 1.3, 1.1, true),
+  ]);
+  stop();
+  killcam(ctx, { at: ctx.V, yaw: 60, pitch: 30, dist: 1.5, lift: 0.2, fov: 32 }, 0.15, 1.3);
+  finish(ctx, { mode: 'halves', axis: 'x', power: 2.4, up: 1.2 });
+  await Promise.all([
+    D.orbit({ at: ctx.V, yaw: 60, pitch: 30, dist: 1.6, lift: 0.2 }, 150, 1.6),
+    anim.tween(0.5, (k) => {
+      for (const w of pack) w.model.position.copy(w.bite).addScaledVector(w.away, 0.16 + k * 0.5);
+      setZ(atk, dist - 0.54 - k * 0.2, 0);
+    }),
+  ]);
+  // the pack slinks off into the dark
+  await anim.tween(0.6, (k, raw) => {
+    for (const w of pack) {
+      w.model.position.addScaledVector(w.away, 0.08);
+      w.model.lookAt(w.model.position.clone().add(w.away));
+      gait(w.parts, raw * 30, 0.6);
+      w.model.scale.setScalar(1 - k);
     }
-    vic.model.scale.set(1 + k * 0.35, 1 - k * 0.2, 1 + k * 0.25);
-    vic.model.rotation.y = Math.sin(k * 35) * 0.2;
+    setZ(atk, lerp(dist - 0.74, dist, k), 0);
+    p.head.rotation.set(0, 0, 0);
   });
-  await rip(ctx, { power: 4, up: 2, word: 'TORN!', shake: 0.4 });
-  // ghosts dissolve
-  for (const gh of ghosts) fx.burst(gh.model.position.clone().setY(BOARD_Y + 0.3), { count: 16, colors: [0x9fd8ff, 0xffffff], glow: true, speed: 1.2, up: 1.2, size: [0.02, 0.05], life: [0.5, 0.9], gravity: -1 });
-  await anim.tween(0.5, (k) => {
-    ghostMat.opacity = 0.8 * (1 - k);
-    setModelZ(atk, lerp(dist - 0.53, dist, k), 0);
-    p.head.rotation.x = 0.2 * (1 - k);
-  });
-  for (const gh of ghosts) gh.model.removeFromParent();
-  ghostMat.dispose();
+  for (const w of pack) w.model.removeFromParent();
 }
 
-// ------------------------------------------------------------------ BEAR: Pancake Slam
+// ------------------------------------------------------------------ BEAR: Maul & Crush
 async function bear(ctx) {
-  const { anim, atk, vic, fx, sfx, dist } = ctx;
+  const { anim, atk, vic, sfx, dist, D } = ctx;
   const p = atk.parts;
-  const stand = dist - 0.75;
-  await anim.tween(0.35, (k) => setModelZ(atk, lerp(0, stand, k), arc(k, 0.12)));
+  const stand = dist - 0.62;
+  await anim.tween(0.45, (k, raw) => {
+    setZ(atk, lerp(0, stand, k));
+    gait(p, raw * 14, 0.3);
+  });
   const hind = new THREE.Vector3(0, 0.02, -0.22);
   const base = new THREE.Vector3(0, 0.07, stand);
-  sfx.play('roar', { pitch: 0.65 });
-  // rear up on the hind legs and grow huge
-  await anim.tween(0.8, (k) => {
-    rotateAbout(atk, -1.15 * Ease.outBack(k), hind, 1 + 0.75 * k, base);
+  // rears up, towering over the prey (low hero angle)
+  D.cut({ at: ctx.V, yaw: -20, pitch: 2, dist: 1.2, lift: 0.45, fov: 36 });
+  sfx.play('roar', { pitch: 0.6 });
+  await anim.tween(0.9, (k) => {
+    rotateAbout(atk, -1.2 * Ease.outCubic(k), hind, 1 + 0.25 * k, base);
     p.legFL.rotation.x = p.legFR.rotation.x = -0.9 * k;
-    p.head.rotation.x = 0.8 * k;
-    p.jaw.rotation.x = 0.6 * k;
-    vic.model.scale.set(1 - 0.08 * k, 1 - 0.1 * k, 1 - 0.08 * k);
+    p.head.rotation.x = 0.7 * k;
+    p.jaw.rotation.x = 0.7 * Math.sin(k * Math.PI * 0.9);
   });
-  await wobble(ctx, vic, 0.35, 0.1, 40);
-  // SLAM
-  await anim.tween(0.16, (k) => {
-    rotateAbout(atk, lerp(-1.15, 0.45, k), hind, 1.75, base);
-    p.legFL.rotation.x = p.legFR.rotation.x = lerp(-0.9, -1.4, k);
+  // massive swipe: claws rake the prey
+  killcam(ctx, { at: ctx.V, yaw: 60, pitch: 10, dist: 1.2, lift: 0.3, fov: 30 }, 0.25, 0.6);
+  sfx.play('slash');
+  await anim.tween(0.2, (k) => {
+    p.legFL.rotation.x = lerp(-0.9, -0.2, k);
+    p.legFL.rotation.z = lerp(0, -0.9, k);
+  });
+  hit(ctx, bodyPoint(vic, 0.3), { dir: ctx.dir.clone().applyAxisAngle(UP, 1.2).setY(0.5), count: 70, wound: 0.06, gash: 1, sound: 'crunch', impact: 1.1 });
+  await anim.tween(0.3, (k) => (vic.model.rotation.z = -1.4 * Ease.outQuad(k)));
+  // drops its full weight on it
+  D.cut({ at: ctx.V, yaw: 35, pitch: 26, dist: 1.6, lift: 0.2, fov: 32 });
+  await anim.tween(0.18, (k) => {
+    rotateAbout(atk, lerp(-1.2, 0.45, k), hind, 1.25, base);
+    p.legFL.rotation.set(lerp(-0.2, -1.4, k), 0, 0);
+    p.legFR.rotation.x = lerp(-0.9, -1.4, k);
   }, Ease.inQuad);
   sfx.play('boom');
-  ctx.world.shake(0.8);
-  fx.ring(ctx.V, { color: 0xffffff, to: 3.2, duration: 0.6 });
-  fx.dust(ctx.V.clone().setY(BOARD_Y + 0.1), 26, 0xb9a27f);
-  fx.text(vicCenter(ctx, 1.4), 'SLAM!', { color: '#ffe14d' });
-  await anim.tween(0.12, (k) => vic.model.scale.set(1 + 0.8 * k, 1 - 0.88 * k, 1 + 0.8 * k), Ease.outQuad);
-  await anim.wait(0.35);
-  // lift off the pancake, which cracks apart
-  await anim.tween(0.3, (k) => rotateAbout(atk, lerp(0.45, -0.4, k), hind, 1.75, base));
-  sfx.play('pop');
-  await rip(ctx, { power: 2.6, up: 1.4, spin: 6, shake: 0.3, word: 'PANCAKED!' });
+  sfx.play('crunch');
+  ctx.world.shake(0.4);
+  ctx.D.impact(1.2);
+  ctx.fx.ring(ctx.V, { color: 0x3a0004, to: 1.8, duration: 0.6, opacity: 0.6 });
+  ctx.gore.burst(bodyPoint(vic, 0.1), 0.8);
+  ctx.gore.pool(ctx.V.clone(), 0.9, 2);
+  await anim.tween(0.12, (k) => vic.model.scale.set(1 + 0.25 * k, 1 - 0.45 * k, 1 + 0.2 * k));
+  await struggle(ctx, vic, 0.6, 0.8, true);
+  // bites down and rips upward
+  killcam(ctx, { at: ctx.V, yaw: 42, pitch: 10, dist: 1.3, lift: 0.3, fov: 30 }, 0.15, 1.3);
+  await anim.tween(0.15, (k) => (p.head.rotation.x = lerp(0.7, 1.1, k)));
+  hit(ctx, headPoint(vic), { count: 40, wound: 0.05, sound: 'bite', impact: 0.6 });
+  await anim.tween(0.2, (k) => {
+    p.head.rotation.x = lerp(1.1, -0.3, k);
+    rotateAbout(atk, lerp(0.45, -0.3, k), hind, 1.25, base);
+  });
+  finish(ctx, { mode: 'limbs', power: 2.0, up: 2.2 });
+  sfx.play('roar', { pitch: 0.55 });
+  await D.orbit({ at: ctx.V, yaw: 42, pitch: 10, dist: 1.5, lift: 0.3 }, 165, 1.6);
   await anim.tween(0.5, (k) => {
-    const b = new THREE.Vector3(0, 0.07 + arc(k, 0.2), lerp(stand, dist, k));
-    rotateAbout(atk, lerp(-0.4, 0, k), hind, 1.75 - 0.75 * k, b);
-    p.legFL.rotation.x = p.legFR.rotation.x = -1.4 * (1 - k);
-    p.head.rotation.x = 0.8 * (1 - k);
-    p.jaw.rotation.x = 0.6 * (1 - k);
+    const b = new THREE.Vector3(0, 0.07 + arc(k, 0.12), lerp(stand, dist, k));
+    rotateAbout(atk, lerp(-0.3, 0, k), hind, 1.25 - 0.25 * k, b);
+    p.legFL.rotation.set(-1.4 * (1 - k), 0, 0);
+    p.legFR.rotation.x = -1.4 * (1 - k);
+    p.head.rotation.x = -0.3 * (1 - k);
+    p.jaw.rotation.x = 0;
   });
   atk.model.position.set(0, 0.07, dist);
 }
 
-// ------------------------------------------------------------------ COBRA: Coil & Venom
+// ------------------------------------------------------------------ COBRA: Strike & Constrict
 async function cobra(ctx) {
-  const { anim, atk, vic, fx, sfx, dist, world } = ctx;
+  const { anim, atk, vic, sfx, dist, world, D } = ctx;
   const p = atk.parts;
+  const neckRest = p.neck.map((seg) => seg.rotation.x);
+  // rears up, hood spread — face to face
+  D.cut({ at: ctx.A, yaw: 50, pitch: 6, dist: 1.0, lift: 0.55, fov: 30 });
   sfx.play('hiss');
-  // slither up beside the victim with the hood flared
-  await anim.tween(0.7, (k) => {
-    setModelZ(atk, lerp(0, dist - 0.55, k), 0);
-    atk.model.position.x = Math.sin(k * Math.PI * 3) * 0.12;
-    p.hood.scale.set(1 + k * 0.6, 1 + k * 0.3, 1);
+  await anim.tween(0.9, (k) => {
+    p.hood.scale.set(1 + 0.6 * k, 1 + 0.25 * k, 1);
+    p.jaw.rotation.x = 0.5 * k;
+    p.tongue.scale.z = Math.sin(k * 30) > 0 ? 1 : 0.01;
   });
-  atk.model.position.x = 0;
-  // coils spiral up around the victim
-  const coilMat = new THREE.MeshStandardMaterial({ color: 0x4f8f3a, roughness: 0.5, flatShading: true });
-  const bandMat = new THREE.MeshStandardMaterial({ color: 0x2c5a20, roughness: 0.5, flatShading: true });
+  await anim.tween(0.45, (k) => setZ(atk, lerp(0, dist - 0.55, k), 0));
+  // lightning strike to the neck
+  killcam(ctx, { at: ctx.V, yaw: 50, pitch: 8, dist: 1.0, lift: 0.4, fov: 30 }, 0.15, 0.8);
+  await anim.tween(0.1, (k) => {
+    p.neck.forEach((seg, i) => (seg.rotation.x = lerp(neckRest[i], 0.45, k)));
+    p.head.rotation.x = lerp(-0.1, 0.5, k);
+    p.jaw.rotation.x = 1.0;
+    setZ(atk, dist - 0.55 + 0.22 * k, 0);
+  }, Ease.inQuad);
+  hit(ctx, headPoint(vic), { count: 30, wound: 0.035, sound: 'bite', impact: 0.9 });
+  ctx.gore.wound(vic, headPoint(vic).add(new THREE.Vector3(0.03, 0, 0)), { size: 0.03 });
+  sfx.play('hiss');
+  // venom: the prey convulses and its flesh blackens
+  await Promise.all([
+    struggle(ctx, vic, 1.0, 1.3),
+    anim.tween(1.0, (k) => {
+      vic.tint(0x2a2a12, 0.55 * k, 0);
+      if (Math.random() < 0.3) ctx.gore.spray(headPoint(vic), new THREE.Vector3(0, -0.2, 1).applyAxisAngle(UP, rand(-1, 1)), { count: 3, speed: 1 });
+    }),
+  ]);
+  // coils crush it
+  const scales = atk.meshes()[0].material;
   const coils = [];
   for (let i = 0; i < 3; i++) {
-    const m = new THREE.Mesh(new THREE.TorusGeometry(0.38, 0.065, 8, 28), i % 2 ? bandMat : coilMat);
+    const m = new THREE.Mesh(new THREE.TorusGeometry(0.34, 0.06, 14, 40), scales);
     m.rotation.x = Math.PI / 2;
-    m.position.copy(ctx.V).setY(BOARD_Y + 0.1 + i * 0.17);
+    m.position.copy(ctx.V).setY(BOARD_Y + 0.1 + i * 0.15);
     m.scale.setScalar(0.01);
     m.castShadow = true;
     world.transient.add(m);
     coils.push(m);
   }
-  sfx.play('hiss');
-  for (const [i, m] of coils.entries()) {
-    await anim.tween(0.18, (k) => {
-      m.scale.setScalar(Ease.outBack(k));
+  D.cut({ at: ctx.V, yaw: 20, pitch: 22, dist: 1.5, lift: 0.3, fov: 32 });
+  for (const m of coils) {
+    sfx.play('creak');
+    await anim.tween(0.2, (k) => {
+      m.scale.setScalar(Ease.outCubic(k));
       m.rotation.z = k * 3;
     });
-    sfx.play('pinch', { delay: i * 0.02 });
   }
-  // squeeze
-  sfx.play('creak');
-  await anim.tween(0.8, (k) => {
-    const s = 1 - 0.38 * Ease.inOutQuad(k);
-    coils.forEach((m, i) => {
-      m.scale.set(s, s, 1 + Math.sin(k * 30 + i) * 0.05);
-      m.rotation.z += 0.05;
+  for (let i = 0; i < 3; i++) {
+    await anim.tween(0.3, (k) => {
+      const s = 1 - 0.12 * (i + Ease.inQuad(k));
+      coils.forEach((m) => m.scale.set(s, s, 1));
+      vic.model.scale.set(1 - 0.1 * (i + k), 1 + 0.06 * (i + k), 1 - 0.1 * (i + k));
     });
-    vic.model.scale.set(1 - 0.35 * k, 1 + 0.3 * k, 1 - 0.35 * k);
-    vic.model.rotation.y = Math.sin(k * 40) * 0.15;
-  });
-  // strike!
-  const neckRest = p.neck.map((seg) => seg.rotation.x);
-  await anim.tween(0.2, (k) => {
-    p.neck.forEach((seg, i) => (seg.rotation.x = lerp(neckRest[i], -0.3, k)));
-    p.head.rotation.x = -0.5 * k;
-    p.jaw.rotation.x = 0.9 * k;
-  });
-  sfx.play('bite');
-  await anim.tween(0.14, (k) => {
-    p.neck.forEach((seg) => (seg.rotation.x = lerp(-0.3, 0.45, k)));
-    p.head.rotation.x = lerp(-0.5, 0.5, k);
-    setModelZ(atk, dist - 0.55 + 0.2 * k, 0);
-  }, Ease.inQuad);
-  fx.flash(vicCenter(ctx, 0.6), { color: 0x66ff44, size: 1.6 });
-  fx.text(vicCenter(ctx, 1.3), 'VENOM!', { color: '#7dff4d', stroke: '#0d2a05' });
-  sfx.play('hiss');
-  // poison spreads
-  await anim.tween(0.7, (k) => {
-    vic.tint(0x44ff22, 0.75 * k, 0.4 * k);
-    vic.model.rotation.z = Math.sin(k * 50) * 0.12;
-    p.jaw.rotation.x = 0.9 * (1 - k);
-    if (Math.random() < 0.4) fx.burst(vicCenter(ctx, rand(0.2, 0.7)), { count: 1, colors: [0x66ff44, 0xb6ff8a], shape: 'sphere', speed: 0.3, up: 0.8, gravity: -1, size: [0.03, 0.06], life: [0.5, 0.9], floor: false });
-  });
-  fx.burst(vicCenter(ctx, 0.4), { count: 30, colors: [0x66ff44, 0x2c8a1a, 0xb6ff8a], shape: 'sphere', speed: 3, up: 2, size: [0.04, 0.08] });
-  await rip(ctx, { power: 3.2, up: 2.2, word: 'CRUSHED!', wordColor: '#7dff4d', flashColor: 0x88ff66 });
-  await anim.tween(0.4, (k) => {
-    coils.forEach((m) => {
-      m.scale.setScalar(0.62 * (1 - k));
-      m.position.y -= 0.004;
-    });
-    p.neck.forEach((seg, i) => (seg.rotation.x = lerp(0.45, neckRest[i], k)));
-    p.head.rotation.x = lerp(0.5, -0.1, k);
-    setModelZ(atk, lerp(dist - 0.35, dist, k), 0);
-    p.hood.scale.set(1.6 - 0.6 * k, 1.3 - 0.3 * k, 1);
-  });
+    sfx.play('crunch');
+    ctx.gore.spray(bodyPoint(vic, 0.35), UP, { count: 40, speed: 2.2, spread: 0.8 });
+    ctx.D.impact(0.6);
+  }
+  killcam(ctx, { at: ctx.V, yaw: 42, pitch: 12, dist: 1.2, lift: 0.35, fov: 30 }, 0.15, 1.3);
+  finish(ctx, { mode: 'halves', axis: 'z', power: 2.0, up: 1.6 });
+  await Promise.all([
+    D.orbit({ at: ctx.V, yaw: 42, pitch: 12, dist: 1.3, lift: 0.3 }, 160, 1.6),
+    anim.tween(0.5, (k) => coils.forEach((m) => m.scale.setScalar(0.64 * (1 - k)))),
+  ]);
   for (const m of coils) {
     m.removeFromParent();
     m.geometry.dispose();
   }
-  coilMat.dispose();
-  bandMat.dispose();
+  await anim.tween(0.4, (k) => {
+    p.neck.forEach((seg, i) => (seg.rotation.x = lerp(0.45, neckRest[i], k)));
+    p.head.rotation.x = lerp(0.5, -0.1, k);
+    p.jaw.rotation.x = 1 - k;
+    setZ(atk, lerp(dist - 0.33, dist, k), 0);
+    p.hood.scale.set(1.6 - 0.6 * k, 1.25 - 0.25 * k, 1);
+  });
 }
 
 // ------------------------------------------------------------------ SHARK: Deep Strike
 async function shark(ctx) {
-  const { anim, atk, vic, fx, sfx, dist, world } = ctx;
+  const { anim, atk, vic, sfx, dist, world, fx, D } = ctx;
   const p = atk.parts;
-  // dive into its own puddle
+  D.cut({ at: ctx.A, yaw: 40, pitch: 10, dist: 1.4, lift: 0.2, fov: 34 });
   sfx.play('splash');
-  fx.burst(ctx.A.clone().setY(BOARD_Y + 0.15), { count: 18, colors: [0x2a86d8, 0x8fd3ff, 0xffffff], shape: 'sphere', speed: 1.8, up: 2.5, size: [0.03, 0.06] });
-  await anim.tween(0.45, (k) => {
+  fx.burst(ctx.A.clone().setY(BOARD_Y + 0.15), { count: 16, colors: [0x0f3d5c, 0x8fb8cc, 0xdfeef5], shape: 'sphere', speed: 1.6, up: 2.2, size: [0.02, 0.05] });
+  await anim.tween(0.5, (k) => {
     p.body.rotation.x = 0.9 * k;
-    p.body.position.y = 0.19 - k * 0.7;
-    p.body.scale.setScalar(1 - k * 0.6);
-    p.water.scale.set(0.39 * (1 - k * 0.5), 0.02, 0.39 * (1 - k * 0.5));
+    p.body.position.y = 0.19 - k * 0.75;
   }, Ease.inQuad);
   p.body.visible = false;
-  // a whirlpool opens below the victim
-  const poolMat = new THREE.MeshStandardMaterial({ color: 0x1e6fc0, transparent: true, opacity: 0.9, roughness: 0.1, metalness: 0.2 });
-  const pool = new THREE.Mesh(new THREE.CircleGeometry(0.62, 40), poolMat);
+  // dark water opens under the prey
+  const poolMat = new THREE.MeshStandardMaterial({ color: 0x0b2c44, transparent: true, opacity: 0.94, roughness: 0.05, metalness: 0.25 });
+  const pool = new THREE.Mesh(new THREE.CircleGeometry(0.62, 48), poolMat);
   pool.rotation.x = -Math.PI / 2;
   pool.position.copy(ctx.V).setY(BOARD_Y + 0.012);
   pool.scale.setScalar(0.01);
   world.transient.add(pool);
-  const swirlStop = anim.every((dt) => {
-    pool.rotation.z += dt * 4;
+  const swirl = anim.every((dt) => (pool.rotation.z += dt * 3));
+  const ripples = anim.every(() => {
+    if (Math.random() < 0.06) fx.ring(ctx.V, { color: 0x9cc6da, from: 0.15, to: 0.62, duration: 0.7, y: BOARD_Y + 0.02, opacity: 0.5 });
   });
+  D.cut({ at: ctx.V, yaw: 65, pitch: 9, dist: 1.5, lift: 0.25, fov: 32 });
   sfx.play('dunDun');
-  const ringLoop = anim.every(() => {
-    if (Math.random() < 0.08) fx.ring(ctx.V, { color: 0xbfe6ff, from: 0.15, to: 0.62, duration: 0.6, y: BOARD_Y + 0.02, opacity: 0.7 });
-  });
-  await anim.tween(0.4, (k) => pool.scale.setScalar(Ease.outBack(k)));
-  // fin circles the victim
-  const fin = new THREE.Mesh(new THREE.ConeGeometry(0.15, 0.4, 4), new THREE.MeshStandardMaterial({ color: 0x4d6a82, flatShading: true }));
+  await anim.tween(0.45, (k) => pool.scale.setScalar(Ease.outCubic(k)));
+  const finMat = atk.meshes().find((m) => m.material.side === THREE.DoubleSide)?.material ?? new THREE.MeshStandardMaterial({ color: 0x485866 });
+  const fin = new THREE.Mesh(new THREE.ConeGeometry(0.15, 0.42, 4), finMat);
   fin.scale.set(0.3, 1, 1);
   fin.castShadow = true;
   world.transient.add(fin);
-  const vicLook = vic.model.rotation.y;
-  await anim.tween(1.4, (k) => {
+  const look0 = vic.model.rotation.y;
+  sfx.play('heartbeat');
+  await anim.tween(1.5, (k) => {
     const a = k * Math.PI * 4;
-    const r = 0.52 - k * 0.1;
+    const r = 0.52 - k * 0.12;
     fin.position.set(ctx.V.x + Math.cos(a) * r, BOARD_Y + 0.17, ctx.V.z + Math.sin(a) * r);
     fin.rotation.y = -a;
-    if (Math.random() < 0.5) {
-      fx.burst(fin.position.clone().setY(BOARD_Y + 0.03), { count: 1, colors: [0xffffff, 0xbfe6ff], shape: 'sphere', speed: 0.3, up: 0.3, gravity: 2, size: [0.025, 0.045], life: [0.3, 0.5] });
-    }
-    vic.model.rotation.y = vicLook + Math.sin(k * 20) * 0.3;
-    vic.model.position.x = Math.sin(k * 50) * 0.02;
+    if (Math.random() < 0.5) fx.burst(fin.position.clone().setY(BOARD_Y + 0.03), { count: 1, colors: [0xdfeef5, 0x9cc6da], shape: 'sphere', speed: 0.3, up: 0.3, gravity: 2, size: [0.02, 0.04], life: [0.3, 0.5] });
+    vic.model.rotation.y = look0 + Math.sin(k * 18) * 0.35;
+    if (k > 0.7 && Math.random() < 0.1) sfx.play('heartbeat');
   });
   fin.removeFromParent();
   fin.geometry.dispose();
-  fin.material.dispose();
-  vic.model.position.x = 0;
-  // ERUPT jaws-first beneath the victim
-  setModelZ(atk, dist, -0.7);
+  // ERUPTION — jaws first, in slow motion
+  setZ(atk, dist, -0.9);
   atk.model.rotation.set(-Math.PI / 2, 0, 0);
   p.body.visible = true;
   p.body.position.y = 0.19;
   p.body.rotation.x = 0;
-  p.body.scale.setScalar(1.6);
+  p.body.scale.setScalar(1.5);
   p.water.visible = false;
+  killcam(ctx, { at: ctx.V, yaw: 35, pitch: 4, dist: 1.6, lift: 0.7, fov: 34 }, 0.25, 0.9);
   sfx.play('splash');
-  sfx.play('roar', { pitch: 0.7 });
-  fx.burst(ctx.V.clone().setY(BOARD_Y + 0.2), { count: 40, colors: [0x2a86d8, 0x8fd3ff, 0xffffff], shape: 'sphere', speed: 2.5, up: 5, size: [0.04, 0.08], life: [0.8, 1.4] });
-  ctx.world.shake(0.4);
-  await anim.tween(0.3, (k) => {
-    atk.model.position.y = lerp(-0.7, 0.9, Ease.outQuad(k));
+  sfx.play('roar', { pitch: 0.5 });
+  fx.burst(ctx.V.clone().setY(BOARD_Y + 0.2), { count: 40, colors: [0x0f3d5c, 0x8fb8cc, 0xdfeef5], shape: 'sphere', speed: 2.4, up: 4.5, size: [0.03, 0.07], life: [0.8, 1.4] });
+  await anim.tween(0.32, (k) => {
+    atk.model.position.y = lerp(-0.9, 0.85, Ease.outQuad(k));
     p.jaw.rotation.x = 1.1 * k;
-    vic.root.position.y = BOARD_Y + 0.0 + k * 1.1;
-    vic.model.rotation.x = k * 0.6;
+    vic.root.position.y = BOARD_Y + k * 1.05;
+    vic.model.rotation.x = k * 0.7;
   });
-  // CHOMP
-  await anim.tween(0.1, (k) => (p.jaw.rotation.x = 1.1 * (1 - k)));
-  sfx.play('bite');
-  await rip(ctx, { power: 2.5, up: 3.5, word: 'CHOMP!', wordColor: '#8fd3ff', stroke: '#002244', shake: 0.5 });
-  // flip back down into the water
-  await anim.tween(0.55, (k) => {
-    atk.model.position.y = 0.07 + arc(k, 0.5) + (1 - k) * 0.83 - k * 0.9;
-    atk.model.rotation.x = lerp(-Math.PI / 2, Math.PI * 0.6, k);
-  });
+  // CHOMP — teeth through the middle
+  await anim.tween(0.08, (k) => (p.jaw.rotation.x = 1.1 * (1 - k * 0.7)));
+  hit(ctx, bodyPoint(vic, 0.25), { count: 80, wound: 0.07, sound: 'crunch', impact: 1.2, mist: 1 });
+  // thrash, turning the water red
+  const stop = D.track({ at: () => bodyPoint(vic, 0.0), yaw: 50, pitch: 10, dist: 1.5, lift: 0.0 }, 7);
+  await Promise.all([
+    anim.tween(1.0, (k, raw) => {
+      atk.model.rotation.z = Math.sin(raw * 35) * 0.5;
+      vic.root.position.x += Math.sin(raw * 35) * 0.004;
+      poolMat.color.lerp(new THREE.Color(0x4a0408), 0.03);
+      if (Math.random() < 0.5) ctx.gore.spray(bodyPoint(vic, 0.2), new THREE.Vector3(rand(-1, 1), 0.6, rand(-1, 1)), { count: 6, speed: 2.4 });
+      if (Math.random() < 0.06) sfx.play('splash');
+    }),
+    struggle(ctx, vic, 1.0, 1.3, true),
+  ]);
+  stop();
+  atk.model.rotation.z = 0;
+  // bites clean through
+  killcam(ctx, { at: () => bodyPoint(vic, 0.0), yaw: 45, pitch: 6, dist: 1.4, lift: 0.0, fov: 32 }, 0.15, 1.3);
+  await anim.tween(0.08, (k) => (p.jaw.rotation.x = 0.33 * (1 - k)));
+  finish(ctx, { mode: 'halves', axis: 'z', power: 1.8, up: 0.8 });
   sfx.play('splash');
-  fx.burst(ctx.V.clone().setY(BOARD_Y + 0.15), { count: 20, colors: [0x2a86d8, 0x8fd3ff, 0xffffff], shape: 'sphere', speed: 2, up: 3, size: [0.03, 0.06] });
-  // resurface calmly on the square
+  await Promise.all([
+    D.orbit({ at: ctx.V, yaw: 42, pitch: 8, dist: 1.6, lift: 0.6 }, 160, 1.6),
+    anim.tween(0.6, (k) => {
+      atk.model.position.y = 0.07 + arc(k, 0.4) + (1 - k) * 0.78 - k * 0.95;
+      atk.model.rotation.x = lerp(-Math.PI / 2, Math.PI * 0.6, k);
+    }),
+  ]);
+  sfx.play('splash');
+  // resurfaces on the square
   atk.model.rotation.set(0, 0, 0);
   p.body.scale.setScalar(1);
   p.water.visible = true;
-  p.water.scale.set(0.39, 0.02, 0.39);
-  setModelZ(atk, dist, -0.5);
+  setZ(atk, dist, -0.5);
   await anim.tween(0.5, (k) => {
-    atk.model.position.y = lerp(-0.5, 0.07, Ease.outBack(k));
+    atk.model.position.y = lerp(-0.5, 0.07, Ease.outCubic(k));
     pool.scale.setScalar(1 - k);
   });
-  swirlStop();
-  ringLoop();
+  swirl();
+  ripples();
   pool.removeFromParent();
   pool.geometry.dispose();
   poolMat.dispose();
   vic.root.position.y = BOARD_Y;
 }
 
-// ------------------------------------------------------------------ GORILLA: Ground Pound
+// ------------------------------------------------------------------ GORILLA: Pulverize
 async function gorilla(ctx) {
-  const { anim, atk, vic, fx, sfx, dist } = ctx;
+  const { anim, atk, vic, sfx, dist, D } = ctx;
   const p = atk.parts;
-  // chest pounding
+  D.cut({ at: ctx.A, yaw: 45, pitch: 2, dist: 1.25, lift: 0.5, fov: 34 });
   for (let i = 0; i < 4; i++) {
     const arm = i % 2 ? p.armR : p.armL;
     sfx.play('drum');
-    await anim.tween(0.17, (k) => {
+    sfx.play('drum', { delay: 0.04 });
+    await anim.tween(0.24, (k) => {
       const s = Math.sin(k * Math.PI);
-      arm.rotation.x = -1.3 * s;
-      arm.rotation.z = (i % 2 ? 0.9 : -0.9) * s;
-      p.head.rotation.x = -0.3 * s;
-      p.jaw.rotation.x = 0.5 * s;
+      arm.rotation.x = -1.4 * s;
+      arm.rotation.z = (i % 2 ? 1 : -1) * 0.95 * s;
+      p.head.rotation.x = -0.25 * s;
+      p.jaw.rotation.x = 0.4 * s;
     });
   }
-  sfx.play('roar', { pitch: 0.75 });
-  // leap to the victim and grab it
+  sfx.play('roar', { pitch: 0.7 });
+  await anim.tween(0.5, (k) => (p.jaw.rotation.x = 0.7 * Math.sin(k * Math.PI)));
+  // charge and seize
+  D.cut({ at: ctx.V, yaw: 15, pitch: 12, dist: 2.0, lift: 0.4, fov: 34 });
   await anim.tween(0.35, (k) => {
-    setModelZ(atk, lerp(0, dist - 0.45, k), arc(k, 0.5));
-    p.armL.rotation.x = p.armR.rotation.x = -1.6 * k;
+    setZ(atk, lerp(0, dist - 0.45, k), arc(k, 0.2));
+    p.armL.rotation.x = p.armR.rotation.x = -1.5 * k;
   });
-  ctx.world.shake(0.15);
-  // hoist overhead (victim parented to the gorilla)
+  hit(ctx, bodyPoint(vic, 0.2), { count: 15, wound: 0, sound: 'crunch', impact: 0.4 });
   const vicStart = vic.root.position.clone();
-  const overhead = new THREE.Vector3();
-  atk.model.localToWorld(overhead.set(0, 1.05, 0.05));
-  await anim.tween(0.4, (k) => {
-    vic.root.position.lerpVectors(vicStart, overhead, Ease.outQuad(k));
-    vic.root.position.y += arc(k, 0.3);
-    p.armL.rotation.x = p.armR.rotation.x = lerp(-1.6, -3.0, k);
-    vic.model.rotation.z = k * Math.PI * 0.9;
-  });
-  const ground = vicStart.clone();
-  // two brutal slams in front
+  const overhead = atk.model.localToWorld(new THREE.Vector3(0, 1.05, 0.05));
+  await Promise.all([
+    anim.tween(0.4, (k) => {
+      vic.root.position.lerpVectors(vicStart, overhead, Ease.outQuad(k));
+      p.armL.rotation.x = p.armR.rotation.x = lerp(-1.5, -3.0, k);
+      vic.model.rotation.z = k * Math.PI * 0.9;
+    }),
+    struggle(ctx, vic, 0.4, 1),
+  ]);
+  // pile-driven into the board, twice
+  const front = ctx.V.clone().addScaledVector(ctx.dir, 0.12).setY(BOARD_Y);
   for (let i = 0; i < 2; i++) {
-    const front = ctx.V.clone().addScaledVector(ctx.dir, 0.15);
-    front.y = BOARD_Y;
-    await anim.tween(0.18, (k) => {
+    if (i === 1) killcam(ctx, { at: front, yaw: 60, pitch: 10, dist: 1.2, lift: 0.2, fov: 30 }, 0.3, 0.4);
+    else D.cut({ at: front, yaw: 40, pitch: 16, dist: 1.6, lift: 0.3, fov: 32 });
+    await anim.tween(0.17, (k) => {
       vic.root.position.lerpVectors(overhead, front, Ease.inQuad(k));
       p.armL.rotation.x = p.armR.rotation.x = lerp(-3.0, -1.2, k);
       atk.model.rotation.x = 0.35 * k;
     });
     sfx.play('thud', { power: 1 });
-    fx.dust(front.clone(), 14);
-    fx.ring(front, { color: 0xffffff, to: 1.6, duration: 0.35 });
-    ctx.world.shake(0.4);
-    vic.model.scale.set(1 + 0.2 * (i + 1), 1 - 0.2 * (i + 1), 1 + 0.2 * (i + 1));
-    if (i === 0) {
-      fx.text(vicCenter(ctx, 1.2), 'WHAM!', { color: '#ffb84d', hold: 0.25 });
-      await anim.tween(0.25, (k) => {
-        vic.root.position.lerpVectors(front, overhead, Ease.outQuad(k));
-        p.armL.rotation.x = p.armR.rotation.x = lerp(-1.2, -3.0, k);
-        atk.model.rotation.x = 0.35 * (1 - k);
-      });
-    }
+    sfx.play('crunch');
+    hit(ctx, front.clone().setY(BOARD_Y + 0.15), { count: 60, wound: 0.06, sound: 'squelch', impact: 1.1, mist: 0.8 });
+    ctx.gore.decal(front, 0.6, 'splat');
+    ctx.world.shake(0.3);
+    vic.model.scale.set(1 + 0.12 * (i + 1), 1 - 0.15 * (i + 1), 1 + 0.12 * (i + 1));
+    await anim.tween(0.27, (k) => {
+      vic.root.position.lerpVectors(front, overhead, Ease.outQuad(k));
+      p.armL.rotation.x = p.armR.rotation.x = lerp(-1.2, -3.0, k);
+      atk.model.rotation.x = 0.35 * (1 - k);
+    });
   }
-  sfx.play('boom');
-  vic.root.position.copy(ground);
-  await rip(ctx, { power: 3.5, up: 2.4, word: 'SMASH!', shake: 0.6 });
-  sfx.play('drum');
-  sfx.play('drum', { delay: 0.15 });
+  // slammed down, then pounded with both fists
+  await anim.tween(0.17, (k) => {
+    vic.root.position.lerpVectors(overhead, front, Ease.inQuad(k));
+    p.armL.rotation.x = p.armR.rotation.x = lerp(-3.0, -1.2, k);
+  });
+  sfx.play('thud');
+  D.cut({ at: front, yaw: 30, pitch: 34, dist: 1.4, lift: 0.1, fov: 32 });
+  for (let i = 0; i < 3; i++) {
+    await anim.tween(0.16, (k) => (p.armL.rotation.x = p.armR.rotation.x = lerp(-1.2, -2.8, Ease.outQuad(k))));
+    await anim.tween(0.1, (k) => (p.armL.rotation.x = p.armR.rotation.x = lerp(-2.8, -1.0, k)), Ease.inQuad);
+    sfx.play('thud', { power: 0.9 });
+    sfx.play('crunch');
+    hit(ctx, bodyPoint(vic, 0.15), { count: 45, wound: 0.05, sound: null, impact: 0.9 });
+    ctx.world.shake(0.25);
+  }
+  // tears it apart with both hands
+  killcam(ctx, { at: front, yaw: 42, pitch: 14, dist: 1.25, lift: 0.3, fov: 30 }, 0.15, 1.3);
+  await anim.tween(0.25, (k) => {
+    p.armL.rotation.z = -1.0 * k;
+    p.armR.rotation.z = 1.0 * k;
+    p.armL.rotation.x = p.armR.rotation.x = lerp(-1.0, -1.6, k);
+    vic.root.position.y = BOARD_Y + 0.3 * k;
+  });
+  finish(ctx, { mode: 'halves', axis: 'x', power: 2.4, up: 1.4 });
+  sfx.play('roar', { pitch: 0.65 });
+  await D.orbit({ at: front, yaw: 42, pitch: 14, dist: 1.4, lift: 0.3 }, 170, 1.6);
+  vic.root.position.copy(vicStart);
   await anim.tween(0.5, (k) => {
-    atk.model.rotation.x = 0.35 * (1 - k);
-    p.armL.rotation.x = p.armR.rotation.x = lerp(-1.2, 0.1, k);
-    setModelZ(atk, lerp(dist - 0.45, dist, k), arc(k, 0.2));
+    atk.model.rotation.x = 0;
+    p.armL.rotation.set(lerp(-1.6, 0, k), 0, lerp(-1.0, 0, k));
+    p.armR.rotation.set(lerp(-1.6, 0, k), 0, lerp(1.0, 0, k));
+    setZ(atk, lerp(dist - 0.45, dist, k), 0);
   });
 }
 
-// ------------------------------------------------------------------ RHINO: Stampede
+// ------------------------------------------------------------------ RHINO: Gore & Trample
 async function rhino(ctx) {
-  const { anim, atk, vic, fx, sfx, dist } = ctx;
+  const { anim, atk, vic, sfx, dist, fx, D } = ctx;
   const p = atk.parts;
-  // back up and paw the ground
-  await anim.tween(0.4, (k) => setModelZ(atk, -0.9 * Ease.outQuad(k), 0));
+  await anim.tween(0.4, (k) => setZ(atk, -0.8 * Ease.outQuad(k), 0));
+  // over the shoulder: pawing, snorting steam, head down
+  D.cut({ at: ctx.A, yaw: -150, pitch: 8, dist: 1.4, lift: 0.5, fov: 34 });
   for (let i = 0; i < 3; i++) {
     sfx.play('snort');
-    const nose = new THREE.Vector3(0, 0.35, 0.55);
-    atk.model.localToWorld(nose);
-    fx.burst(nose, { count: 6, colors: [0xffffff, 0xdddddd], shape: 'sphere', speed: 0.6, up: 0.4, gravity: -0.6, size: [0.03, 0.06], life: [0.4, 0.7], drag: 2, grow: 1.5 });
-    await anim.tween(0.25, (k) => {
+    const nose = atk.model.localToWorld(new THREE.Vector3(0, 0.28, 0.58));
+    fx.burst(nose, { count: 6, colors: [0xe8e8e8, 0xcfcfcf], shape: 'sphere', speed: 0.6, up: 0.4, gravity: -0.6, size: [0.03, 0.06], life: [0.4, 0.7], drag: 2, grow: 1.5 });
+    await anim.tween(0.28, (k) => {
       p.legFL.rotation.x = -0.7 * Math.sin(k * Math.PI);
-      p.head.rotation.x = 0.3 * Math.sin(k * Math.PI);
+      p.head.rotation.x = 0.35 * Math.sin(k * Math.PI);
     });
-    const foot = new THREE.Vector3(0.1, 0.05, 0.25);
-    atk.model.localToWorld(foot);
-    fx.dust(foot, 6);
+    fx.dust(atk.model.localToWorld(new THREE.Vector3(0.1, 0.03, 0.2)), 6);
   }
-  // CHARGE
-  sfx.play('roar', { pitch: 0.6 });
-  const total = dist + 0.9 - 0.3;
+  // CHARGE (tracking from the side)
+  sfx.play('roar', { pitch: 0.5 });
+  const total = dist + 0.8 - 0.3;
   let lastDust = 0;
-  await anim.tween(0.42, (k, raw) => {
-    setModelZ(atk, -0.9 + total * k, Math.abs(Math.sin(raw * 30)) * 0.05);
-    p.head.rotation.x = 0.35;
-    const gait = Math.sin(raw * 40);
-    p.legFL.rotation.x = p.legBR.rotation.x = gait * 0.7;
-    p.legFR.rotation.x = p.legBL.rotation.x = -gait * 0.7;
-    if (raw - lastDust > 0.15) {
+  const stop = D.track({ at: () => wpos(atk.model), yaw: 15, pitch: 5, dist: 1.8, lift: 0.3 }, 9);
+  await anim.tween(0.45, (k, raw) => {
+    setZ(atk, -0.8 + total * k, Math.abs(Math.sin(raw * 30)) * 0.04);
+    p.head.rotation.x = 0.4;
+    gait(p, raw * 40, 0.7);
+    if (raw - lastDust > 0.12) {
       lastDust = raw;
-      const foot = new THREE.Vector3(0, 0.05, -0.2);
-      atk.model.localToWorld(foot);
-      fx.dust(foot, 5);
+      fx.dust(atk.model.localToWorld(new THREE.Vector3(0, 0.03, -0.2)), 5);
     }
   }, Ease.inQuad);
-  // GORE: launch the victim into orbit
-  sfx.play('thud', { power: 1 });
-  ctx.world.shake(0.5);
-  fx.flash(vicCenter(ctx, 0.4), { size: 1.8 });
-  fx.text(vicCenter(ctx, 1.2), 'GORED!', { color: '#ffd04d', hold: 0.3 });
-  sfx.play('whoosh', { dur: 0.8 });
+  stop();
+  // the horn goes in
+  killcam(ctx, { at: ctx.V, yaw: 55, pitch: 8, dist: 1.15, lift: 0.3, fov: 30 }, 0.2, 0.8);
+  sfx.play('thud');
+  hit(ctx, bodyPoint(vic, 0.25), { count: 70, wound: 0.07, sound: 'crunch', impact: 1.2, mist: 0.9 });
+  // tossed high, trailing blood
   const v0 = vic.root.position.clone();
-  const apex = ctx.V.clone().addScaledVector(ctx.dir, 0.6).setY(BOARD_Y + 2.5);
-  await anim.tween(0.85, (k) => {
-    p.head.rotation.x = lerp(0.35, -0.7, Math.min(1, k * 3));
+  const apex = ctx.V.clone().addScaledVector(ctx.dir, 0.7).setY(BOARD_Y + 1.8);
+  const land = ctx.V.clone().addScaledVector(ctx.dir, 0.55).setY(BOARD_Y);
+  sfx.play('whoosh', { dur: 0.7 });
+  const toss = D.track({ at: () => bodyPoint(vic, 0.0), yaw: 40, pitch: 0, dist: 1.9, lift: 0.0 }, 6);
+  await anim.tween(0.6, (k) => {
+    p.head.rotation.x = lerp(0.4, -0.8, Math.min(1, k * 3));
     vic.root.position.lerpVectors(v0, apex, Ease.outQuad(k));
-    vic.model.rotation.x = k * Math.PI * 5;
-    vic.model.rotation.z = k * Math.PI * 3;
-    p.legFL.rotation.x = p.legBR.rotation.x = p.legFR.rotation.x = p.legBL.rotation.x = 0;
+    vic.model.rotation.x = k * Math.PI * 2.2;
+    gait(p, 0, 0);
+    if (Math.random() < 0.6) ctx.gore.spray(bodyPoint(vic, 0.25), null, { count: 3, speed: 0.8, up: 0 });
   });
-  // explodes up high
-  sfx.play('boom');
-  fx.sparks(apex.clone().setY(apex.y + 0.3), 0xffd34d, 30, 5);
-  await rip(ctx, { power: 2.6, up: 1, burst: 1.4, word: 'BOOM!', wordColor: '#ff8a3d', shake: 0.3 });
-  await anim.tween(0.5, (k) => {
-    p.head.rotation.x = -0.7 * (1 - k);
-    setModelZ(atk, lerp(dist - 0.3, dist, k), 0);
+  await anim.tween(0.42, (k) => {
+    vic.root.position.lerpVectors(apex, land, Ease.inQuad(k));
+    vic.model.rotation.x = Math.PI * 2.2 + k * Math.PI * 0.8;
+  });
+  toss();
+  vic.model.rotation.set(0, 0, -1.4);
+  sfx.play('thud');
+  sfx.play('crunch');
+  ctx.gore.burst(land.clone().setY(BOARD_Y + 0.1), 0.6);
+  ctx.world.shake(0.25);
+  // trample
+  await anim.tween(0.35, (k) => {
+    setZ(atk, lerp(dist - 0.3, dist + 0.25, k), 0);
+    p.head.rotation.x = lerp(-0.8, 0.2, k);
+  });
+  D.cut({ at: land, yaw: 45, pitch: 22, dist: 1.3, lift: 0.15, fov: 32 });
+  for (let i = 0; i < 2; i++) {
+    const leg = i % 2 ? p.legFR : p.legFL;
+    await anim.tween(0.2, (k) => {
+      leg.rotation.x = -1.0 * Ease.outQuad(k);
+      atk.model.rotation.x = -0.25 * k;
+    });
+    await anim.tween(0.1, (k) => {
+      leg.rotation.x = -1.0 + 1.0 * k;
+      atk.model.rotation.x = -0.25 + 0.35 * k;
+    }, Ease.inQuad);
+    sfx.play('thud');
+    sfx.play('crunch');
+    hit(ctx, bodyPoint(vic, 0.12), { count: 50, wound: 0.06, sound: null, impact: 1 });
+    ctx.world.shake(0.3);
+  }
+  killcam(ctx, { at: land, yaw: 42, pitch: 12, dist: 1.3, lift: 0.2, fov: 30 }, 0.15, 1.3);
+  await anim.tween(0.12, (k) => {
+    p.legFL.rotation.x = p.legFR.rotation.x = -0.9 * k;
+    atk.model.rotation.x = 0.1 - 0.3 * k;
+  });
+  await anim.tween(0.08, (k) => {
+    p.legFL.rotation.x = p.legFR.rotation.x = -0.9 * (1 - k);
+    atk.model.rotation.x = -0.2 + 0.3 * k;
+  });
+  finish(ctx, { mode: 'limbs', power: 2.6, up: 1.4 });
+  await D.orbit({ at: land, yaw: 42, pitch: 12, dist: 1.5, lift: 0.2 }, 170, 1.6);
+  await anim.tween(0.45, (k) => {
+    atk.model.rotation.x = lerp(0.1, 0, k);
+    p.head.rotation.x = 0.2 * (1 - k);
+    setZ(atk, lerp(dist + 0.25, dist, k), 0);
   });
   vic.root.position.copy(v0);
 }
 
 // ------------------------------------------------------------------ SCORPION: Death Sting
 async function scorpion(ctx) {
-  const { anim, atk, vic, fx, sfx, dist } = ctx;
+  const { anim, atk, vic, sfx, dist, D } = ctx;
   const p = atk.parts;
-  // scuttle in with clacking claws
-  await anim.tween(0.6, (k, raw) => {
-    setModelZ(atk, lerp(0, dist - 0.62, k), 0);
-    p.legs.forEach((leg, i) => (leg.rotation.x = Math.sin(raw * 40 + i * 1.3) * 0.35));
-    p.fingerL.rotation.y = 0.15 + Math.abs(Math.sin(raw * 18)) * 0.6;
-    p.fingerR.rotation.y = -0.15 - Math.abs(Math.sin(raw * 18)) * 0.6;
-  });
-  for (let i = 0; i < 3; i++) sfx.play('pinch', { delay: i * 0.1 });
-  // raise and open the claws
-  await anim.tween(0.3, (k) => {
+  const stop = D.track({ at: () => wpos(atk.model), yaw: 48, pitch: 6, dist: 0.95, lift: 0.18 }, 7);
+  ctx.world.setFov(30);
+  sfx.play('hiss');
+  await anim.tween(0.8, (k, raw) => {
+    setZ(atk, lerp(0, dist - 0.62, k), 0);
+    p.legs.forEach((leg, i) => (leg.rotation.x = Math.sin(raw * 40 + i * 1.3) * 0.32));
     p.clawL.rotation.x = p.clawR.rotation.x = -0.5 * k;
-    p.fingerL.rotation.y = 0.7 * k;
-    p.fingerR.rotation.y = -0.7 * k;
-    p.tail[0].rotation.x = 1.1 + 0.3 * k;
+    p.fingerL.rotation.y = 0.15 + Math.abs(Math.sin(raw * 16)) * 0.6;
+    p.fingerR.rotation.y = -0.15 - Math.abs(Math.sin(raw * 16)) * 0.6;
   });
-  // pinch the victim
-  sfx.play('pinch');
-  sfx.play('bite');
-  await anim.tween(0.15, (k) => {
+  stop();
+  for (let i = 0; i < 3; i++) sfx.play('pinch', { delay: i * 0.1 });
+  // pincers clamp: one at the throat, one at the body
+  D.cut({ at: ctx.V, yaw: 50, pitch: 12, dist: 1.1, lift: 0.3, fov: 30 });
+  await anim.tween(0.2, (k) => {
+    p.fingerL.rotation.y = 0.75 * k;
+    p.fingerR.rotation.y = -0.75 * k;
+  });
+  await anim.tween(0.12, (k) => {
     p.clawL.rotation.x = p.clawR.rotation.x = lerp(-0.5, 0.15, k);
     p.clawL.rotation.y = -0.25 * k;
     p.clawR.rotation.y = 0.25 * k;
-    p.fingerL.rotation.y = lerp(0.7, -0.05, k);
-    p.fingerR.rotation.y = lerp(-0.7, 0.05, k);
+    p.fingerL.rotation.y = lerp(0.75, -0.05, k);
+    p.fingerR.rotation.y = lerp(-0.75, 0.05, k);
   });
-  ctx.world.shake(0.15);
-  await anim.tween(0.2, (k) => {
-    vic.model.position.y = 0.07 + k * 0.12;
-    vic.model.scale.set(1 - 0.2 * k, 1 + 0.1 * k, 1);
-  });
-  // repeated stings, the victim swells with venom
-  for (let i = 0; i < 3; i++) {
-    await anim.tween(0.16, (k) => {
-      p.tail.forEach((seg, j) => (seg.rotation.x = (j === 0 ? 1.4 : 0.5) + 0.25 * k));
-    });
+  hit(ctx, headPoint(vic), { count: 40, wound: 0.045, sound: 'crunch', impact: 0.8 });
+  hit(ctx, bodyPoint(vic, 0.2), { count: 30, wound: 0.045, sound: 'squelch', impact: 0.4 });
+  await anim.tween(0.2, (k) => (vic.model.position.y = 0.07 + 0.1 * k));
+  // the stinger hammers in, again and again
+  for (let i = 0; i < 4; i++) {
+    if (i === 0) killcam(ctx, { at: ctx.V, yaw: 20, pitch: 30, dist: 1.0, lift: 0.4, fov: 30 }, 0.25, 0.5);
+    await anim.tween(0.13, (k) => p.tail.forEach((seg, j) => (seg.rotation.x = (j === 0 ? 1.4 : 0.5) + 0.28 * k)), Ease.inQuad);
     sfx.play('sting');
-    fx.flash(vicCenter(ctx, 0.75), { color: 0xc04dff, size: 1.2, duration: 0.25 });
-    fx.burst(vicCenter(ctx, 0.75), { count: 8, colors: [0xc04dff, 0x7a1fd0], glow: true, speed: 1.6, up: 1, size: [0.02, 0.04], life: [0.3, 0.6] });
-    ctx.world.shake(0.12);
-    const sw = 1 + 0.18 * (i + 1);
-    await anim.tween(0.2, (k) => {
-      p.tail.forEach((seg, j) => (seg.rotation.x = (j === 0 ? 1.4 : 0.5) + 0.25 * (1 - k)));
-      vic.tint(0xa53cff, 0.25 * (i + k), 0.15 * (i + k));
-      vic.model.scale.set(sw * 0.85, sw * 0.95, sw * 0.85);
-    });
+    hit(ctx, bodyPoint(vic, 0.35), { count: 35, wound: 0.03, sound: 'squelch', impact: 0.7, mist: 0.4 });
+    vic.tint(0x1a0a20, 0.18 * (i + 1), 0);
+    await Promise.all([anim.tween(0.18, (k) => p.tail.forEach((seg, j) => (seg.rotation.x = (j === 0 ? 1.4 : 0.5) + 0.28 * (1 - k)))), struggle(ctx, vic, 0.18, 1.2)]);
   }
-  fx.text(vicCenter(ctx, 1.4), 'STING!', { color: '#d48aff', stroke: '#2a0040', hold: 0.3 });
-  await wobble(ctx, vic, 0.5, 0.25, 45);
-  // POP
-  sfx.play('pop');
-  fx.burst(vicCenter(ctx, 0.5), { count: 30, colors: [0xa53cff, 0x5a10a0, 0xe0b0ff], shape: 'sphere', speed: 3.5, up: 2, size: [0.04, 0.08] });
-  await rip(ctx, { power: 3.8, up: 2.4, word: 'POP!', wordColor: '#d48aff', flashColor: 0xd48aff });
+  // convulsions as the venom takes hold, foaming at the mouth
+  await Promise.all([
+    struggle(ctx, vic, 0.9, 1.4, true),
+    anim.tween(0.9, () => {
+      if (Math.random() < 0.3) ctx.fx.burst(headPoint(vic), { count: 2, colors: [0xe8f0d0, 0xc8d8a0], shape: 'sphere', speed: 0.3, up: 0.2, gravity: 1, size: [0.01, 0.02], life: [0.4, 0.8] });
+    }),
+  ]);
+  // ripped apart in the pincers
+  killcam(ctx, { at: ctx.V, yaw: 42, pitch: 12, dist: 1.2, lift: 0.3, fov: 30 }, 0.15, 1.3);
+  await anim.tween(0.2, (k) => {
+    p.clawL.rotation.y = lerp(-0.25, 0.5, k);
+    p.clawR.rotation.y = lerp(0.25, -0.5, k);
+  });
+  finish(ctx, { mode: 'halves', axis: 'x', power: 2.2, up: 1.3 });
+  await D.orbit({ at: ctx.V, yaw: 42, pitch: 12, dist: 1.3, lift: 0.3 }, 160, 1.6);
   await anim.tween(0.45, (k) => {
-    p.clawL.rotation.x = p.clawR.rotation.x = lerp(0.15, -0.6, Math.sin(k * Math.PI));
-    p.clawL.rotation.y = -0.25 * (1 - k);
-    p.clawR.rotation.y = 0.25 * (1 - k);
-    p.tail[0].rotation.x = lerp(1.4, 1.1, k);
-    setModelZ(atk, lerp(dist - 0.62, dist, k), 0);
+    p.clawL.rotation.set(lerp(0.15, 0, k), lerp(0.5, 0, k), 0);
+    p.clawR.rotation.set(lerp(0.15, 0, k), lerp(-0.5, 0, k), 0);
+    p.tail[0].rotation.x = 1.1;
+    setZ(atk, lerp(dist - 0.62, dist, k), 0);
   });
 }
 
 // ------------------------------------------------------------------ CROCODILE: Death Roll
 async function crocodile(ctx) {
-  const { anim, atk, vic, fx, sfx, dist } = ctx;
+  const { anim, atk, vic, sfx, dist, D } = ctx;
   const p = atk.parts;
-  // creep with jaws slowly opening
-  sfx.play('creak');
-  await anim.tween(0.8, (k, raw) => {
-    setModelZ(atk, lerp(0, dist - 0.75, k), 0);
-    p.jaw.rotation.x = 0.9 * k;
+  // eye-level with the board, jaws easing open
+  const stop = D.track({ at: () => wpos(atk.parts.head), yaw: 50, pitch: 2, dist: 1.0, lift: 0.0 }, 6);
+  ctx.world.setFov(30);
+  sfx.play('growl', { pitch: 0.6, dur: 1.2 });
+  await anim.tween(1.0, (k, raw) => {
+    setZ(atk, lerp(0, dist - 0.78, k), 0);
+    p.jaw.rotation.x = 0.85 * k;
     p.head.rotation.x = -0.3 * k;
-    p.legs.forEach((leg, i) => (leg.rotation.y = Math.sin(raw * 18 + i * 1.6) * 0.4));
-    p.tail.forEach((seg, i) => (seg.rotation.y = 0.32 + Math.sin(raw * 10 - i) * 0.3));
+    p.legs.forEach((leg, i) => (leg.rotation.y = Math.sin(raw * 16 + i * 1.6) * 0.35));
+    p.tail.forEach((seg, i) => (seg.rotation.y = 0.32 + Math.sin(raw * 9 - i) * 0.3));
   });
+  stop();
   // SNAP
-  await anim.tween(0.12, (k) => {
-    setModelZ(atk, lerp(dist - 0.75, dist - 0.55, k), 0);
-    p.jaw.rotation.x = lerp(0.9, 0.15, k);
+  killcam(ctx, { at: ctx.V, yaw: 50, pitch: 8, dist: 1.1, lift: 0.25, fov: 30 }, 0.25, 0.6);
+  await anim.tween(0.1, (k) => {
+    setZ(atk, lerp(dist - 0.78, dist - 0.55, k), 0);
+    p.jaw.rotation.x = lerp(0.85, 0.12, k);
     p.head.rotation.x = lerp(-0.3, 0, k);
   });
-  sfx.play('bite');
-  ctx.world.shake(0.3);
-  fx.text(vicCenter(ctx, 1.2), 'SNAP!', { color: '#b6ff6a', stroke: '#0c2a00', hold: 0.25 });
-  // clamp victim in the jaws
+  hit(ctx, bodyPoint(vic, 0.2), { count: 70, wound: 0.07, sound: 'crunch', impact: 1.2, mist: 0.9 });
   const vicStart = vic.root.position.clone();
-  const jawAnchor = new THREE.Group();
-  p.head.add(jawAnchor);
-  jawAnchor.position.set(0, 0.0, 0.32);
-  jawAnchor.updateMatrixWorld(true);
-  const anchorWorld = new THREE.Vector3();
-  jawAnchor.getWorldPosition(anchorWorld);
+  const anchor = new THREE.Group();
+  p.head.add(anchor);
+  anchor.position.set(0, 0.0, 0.3);
+  anchor.updateMatrixWorld(true);
+  const anchorW = wpos(anchor);
   await anim.tween(0.12, (k) => {
-    vic.root.position.lerpVectors(vicStart, anchorWorld.clone().setY(BOARD_Y + 0.02), k);
+    vic.root.position.lerpVectors(vicStart, anchorW.clone().setY(BOARD_Y + 0.02), k);
     vic.model.rotation.x = -0.4 * k;
   });
-  jawAnchor.attach(vic.root);
-  // DEATH ROLL
+  anchor.attach(vic.root);
+  // DEATH ROLL — blood flung off in a spinning ring
   sfx.play('splash');
-  sfx.play('roar', { pitch: 0.55 });
-  const splashLoop = anim.every(() => {
-    if (Math.random() < 0.35) fx.burst(ctx.V.clone().setY(BOARD_Y + 0.15), { count: 3, colors: [0x2a86d8, 0x8fd3ff, 0xffffff], shape: 'sphere', speed: 2.2, up: 1.6, size: [0.03, 0.06], life: [0.4, 0.8] });
+  sfx.play('roar', { pitch: 0.45 });
+  D.cut({ at: ctx.V, yaw: 30, pitch: 18, dist: 1.5, lift: 0.2, fov: 32 });
+  const fling = anim.every(() => {
+    if (Math.random() < 0.6) {
+      const a = Math.random() * Math.PI * 2;
+      ctx.gore.spray(bodyPoint(vic, 0.1), new THREE.Vector3(Math.cos(a), 0.4, Math.sin(a)), { count: 6, speed: 2.6, spread: 0.3 });
+    }
   });
-  fx.ring(ctx.V, { color: 0x8fd3ff, to: 2.2, duration: 0.6 });
-  await anim.tween(1.1, (k) => {
-    atk.model.rotation.z = Ease.inOutQuad(k) * Math.PI * 6;
-    atk.model.position.y = 0.07 + Math.abs(Math.sin(k * Math.PI * 6)) * 0.12;
-    if (Math.random() < 0.1) ctx.world.shake(0.15);
-  });
-  splashLoop();
+  await Promise.all([
+    anim.tween(1.2, (k) => {
+      atk.model.rotation.z = Ease.inOutQuad(k) * Math.PI * 6;
+      atk.model.position.y = 0.07 + Math.abs(Math.sin(k * Math.PI * 6)) * 0.1;
+      if (Math.random() < 0.08) {
+        ctx.world.shake(0.12);
+        sfx.play('squelch');
+      }
+    }),
+    D.orbit({ at: ctx.V, yaw: 30, pitch: 18, dist: 1.5, lift: 0.2 }, 110, 1.2),
+  ]);
+  fling();
   atk.model.rotation.z = 0;
   atk.model.position.y = 0.07;
-  // thrash side to side
-  await anim.tween(0.45, (k) => {
-    p.head.rotation.y = Math.sin(k * Math.PI * 4) * 0.7;
-    p.body.rotation.y = -Math.sin(k * Math.PI * 4) * 0.2;
+  // violent head thrash tears it to pieces
+  await anim.tween(0.45, (k, raw) => {
+    p.head.rotation.y = Math.sin(raw * 26) * 0.7;
+    p.body.rotation.y = -Math.sin(raw * 26) * 0.18;
+    if (Math.random() < 0.4) ctx.gore.spray(bodyPoint(vic, 0.1), new THREE.Vector3(rand(-1, 1), 0.5, rand(-1, 1)), { count: 6, speed: 2.2 });
   });
-  ctx.world.scene.attach(vic.root);
-  p.head.remove(jawAnchor);
-  await rip(ctx, { power: 3.6, up: 2, word: 'DEATH ROLL!', wordColor: '#b6ff6a', stroke: '#0c2a00', shake: 0.45 });
+  killcam(ctx, { at: ctx.V, yaw: 42, pitch: 10, dist: 1.25, lift: 0.2, fov: 30 }, 0.15, 1.3);
+  ctx.world.transient.attach(vic.root);
+  p.head.remove(anchor);
+  finish(ctx, { mode: 'limbs', power: 2.6, up: 1.2 });
+  await D.orbit({ at: ctx.V, yaw: 42, pitch: 10, dist: 1.4, lift: 0.2 }, 165, 1.6);
   vic.root.position.copy(vicStart);
   await anim.tween(0.45, (k) => {
     p.head.rotation.y = 0;
     p.body.rotation.y = 0;
-    p.jaw.rotation.x = 0.15 + 0.5 * Math.sin(k * Math.PI);
-    setModelZ(atk, lerp(dist - 0.55, dist, k), 0);
+    p.jaw.rotation.x = 0.12 + 0.5 * Math.sin(k * Math.PI);
+    setZ(atk, lerp(dist - 0.55, dist, k), 0);
   });
 }
 
 export const ATTACKS = { eagle, tiger, wolf, bear, cobra, shark, gorilla, rhino, scorpion, crocodile };
 
-// Camera framing per attacker: airborne attacks need a wider, higher shot.
-export const CAMERA_HINTS = {
-  eagle: { dist: 4.2, height: 1.4, lift: 1.2 },
-  rhino: { dist: 4.6, height: 1.5, lift: 1.25 },
-  gorilla: { dist: 3.6, height: 1.7, lift: 0.7 },
-  shark: { dist: 3.6, height: 1.8, lift: 0.6 },
-  bear: { dist: 3.6, height: 1.8, lift: 0.7 },
-  wolf: { dist: 4.0, height: 2.2, lift: 0.4 },
-};
-
-// Short victim reaction before the attack lands: it turns to face the threat and trembles.
+// The prey turns to face the threat, lowers itself and snarls.
 export async function victimReacts(ctx) {
-  const { vic, sfx } = ctx;
-  sfx.play('error');
-  ctx.fx.text(vicCenter(ctx, 1.05), '!', { color: '#ffffff', stroke: '#c0101a', size: 0.9, hold: 0.2 });
-  await wobble(ctx, vic, 0.55, 0.1, 45);
-  vic.model.rotation.z = 0;
+  const { vic, sfx, D } = ctx;
+  D.cut({ at: ctx.V, yaw: -32, pitch: 8, dist: 1.25, lift: 0.4, fov: 30 });
+  sfx.play('growl', { pitch: 1.4, dur: 0.6 });
+  await ctx.anim.tween(0.6, (k) => {
+    vic.model.position.y = 0.07 - 0.03 * Math.sin(k * Math.PI * 0.5);
+    if (vic.parts.head) vic.parts.head.rotation.x = 0.2 * k;
+    if (vic.parts.jaw) vic.parts.jaw.rotation.x = 0.45 * Math.sin(k * Math.PI);
+  });
 }
 
-export function makeContext({ world, fx, sfx, atk, vic, A, V }) {
+export function makeContext({ world, fx, gore, sfx, atk, vic, A, V, director, onKill }) {
   const dir = V.clone().sub(A).setY(0);
   const dist = Math.max(0.6, dir.length());
   if (dir.lengthSq() < 1e-6) dir.set(0, 0, 1);
   dir.normalize();
-  return { world, anim: world.anim, fx, sfx, atk, vic, A, V, dir, dist };
+  const mid = A.clone().add(V).multiplyScalar(0.5);
+  return { world, anim: world.anim, fx, gore, sfx, atk, vic, A, V, mid, dir, dist, D: director, onKill };
 }

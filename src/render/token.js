@@ -130,6 +130,21 @@ export class TokenView {
     }
   }
 
+  // Remove wounds left by a fight (they live on the model's parts).
+  clearWounds() {
+    const roots = [];
+    this.model.traverse((o) => o.userData.woundRoot && roots.push(o));
+    for (const r of roots) {
+      r.removeFromParent();
+      r.traverse((o) => {
+        if (!o.isMesh) return;
+        this.savedMaterials?.delete(o);
+        o.geometry.dispose();
+        o.material.dispose();
+      });
+    }
+  }
+
   setOpacity(o) {
     this.isolateMaterials();
     for (const m of this.meshes()) {

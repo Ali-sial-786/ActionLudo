@@ -15,7 +15,9 @@ import { chooseMove } from './ai.js';
 import { TokenView } from '../render/token.js';
 import { Cage, unlockWithKey } from '../render/cage.js';
 import { BOARD_Y, finishSpot, squareWorld, yardCenter, yardSpot } from '../render/boardMesh.js';
-import { ATTACKS, CAMERA_HINTS, makeContext, victimReacts } from '../render/battles.js';
+import { ATTACKS, makeContext, victimReacts } from '../render/battles.js';
+import { Director } from '../render/director.js';
+import { Gore } from '../render/gore.js';
 import { Chain, arcPoints, circlePoints } from '../render/chains.js';
 import { Ease, arc, clamp, lerp } from '../engine/anim.js';
 
@@ -46,6 +48,8 @@ export class GameController {
     this.dice = dice;
     this.sfx = sfx;
     this.hud = hud;
+    this.gore = new Gore(world, fx);
+    this.director = new Director(world);
     this.views = new Map();
     this.cages = new Map();
     this.game = null;
@@ -68,6 +72,7 @@ export class GameController {
     this.views.clear();
     this.cages.clear();
     this.fx.clear();
+    this.gore.clear();
   }
 
   buildPieces(game) {
@@ -274,6 +279,10 @@ export class GameController {
     this.pending = null;
     this.anim.reset();
     this.world.cinematic = false;
+    this.world.slow.hold = 0;
+    this.anim.slow = 1;
+    this.world.setCinematicLook(false);
+    this.world.setFov(this.world.baseFov);
     this.hud.enableRoll(false);
     this.board.showDestination(null);
   }
@@ -416,26 +425,30 @@ export class GameController {
       this.sfx.play('hop', { step: i });
       await this.anim.tween(0.2, (k) => {
         view.root.position.lerpVectors(from, to, k);
-        view.root.position.y = BOARD_Y + arc(k, 0.42);
+        view.root.position.y = BOARD_Y + arc(k, 0.3);
         view.root.rotation.y = lerpAngle(r0, r1, Math.min(1, k * 3));
-        const sq = Math.sin(k * Math.PI);
-        view.model.scale.set(1 - sq * 0.06, 1 + sq * 0.1, 1 - sq * 0.06);
+        view.model.rotation.x = Math.sin(k * Math.PI * 2) * -0.18;
       });
-      view.model.scale.set(1, 1, 1);
+      view.model.rotation.x = 0;
     }
     this.sfx.play('land');
     this.fx.dust(view.root.position.clone().setY(BOARD_Y + 0.03), 6);
   }
 
   async celebrateHome(view) {
+    const p = view.root.position.clone();
+    this.sfx.play('roar', { pitch: 1.1 });
     this.sfx.play('cheer');
-    const p = view.root.position.clone().setY(BOARD_Y + 0.5);
-    this.fx.sparks(p, COLORS[view.token.seat].hex, 30, 4);
-    this.fx.text(p.clone().setY(BOARD_Y + 1.4), 'HOME!', { color: COLORS[view.token.seat].css, stroke: '#ffffff', size: 1 });
-    await this.anim.tween(0.6, (k) => {
-      view.root.position.y = BOARD_Y + arc(k, 0.8);
-      view.root.rotation.y += 0.25;
+    this.fx.ring(p, { color: COLORS[view.token.seat].hex, from: 0.2, to: 1.4, duration: 0.8, opacity: 0.8 });
+    this.fx.sparks(p.clone().setY(BOARD_Y + 0.4), 0xffd24a, 20, 2.5);
+    const head = view.parts.head;
+    await this.anim.tween(0.7, (k) => {
+      const s = Math.sin(k * Math.PI);
+      if (head) head.rotation.x = -0.6 * s;
+      if (view.parts.jaw) view.parts.jaw.rotation.x = 0.6 * s;
+      view.model.position.y = 0.07 + 0.08 * s;
     });
+    view.resetPose();
   }
 
   async releaseFromCage(view) {
@@ -462,19 +475,23 @@ export class GameController {
     const s0 = view.root.scale.x;
     const r0 = view.root.rotation.y;
     const r1 = Math.atan2(start.x - from.x, start.z - from.z);
-    this.sfx.play('cheer');
-    await this.anim.tween(0.15, (k) => view.model.scale.set(1 + 0.1 * k, 1 - 0.25 * k, 1 + 0.1 * k));
+    this.sfx.play('roar', { pitch: 1.2 });
+    await this.anim.tween(0.25, (k) => {
+      view.root.rotation.y = lerpAngle(r0, r1, k);
+      view.model.position.y = 0.07 - 0.05 * k;
+      view.model.rotation.x = 0.15 * k;
+    });
     const camMove = this.restoreCamera(camSaved, 0.7);
-    await this.anim.tween(0.6, (k) => {
+    await this.anim.tween(0.55, (k) => {
       view.root.position.lerpVectors(from, start, k);
-      view.root.position.y = BOARD_Y + arc(k, 1.3);
+      view.root.position.y = BOARD_Y + arc(k, 1.0);
       view.root.scale.setScalar(lerp(s0, 1, k));
-      view.root.rotation.y = lerpAngle(r0, r1, Math.min(1, k * 2));
-      view.model.rotation.x = -Math.PI * 2 * Ease.inOutQuad(k);
-      view.model.scale.set(1 - 0.1 * Math.sin(k * Math.PI), 1 + 0.15 * Math.sin(k * Math.PI), 1);
+      view.root.rotation.y = r1;
+      view.model.position.y = 0.07 - 0.05 * (1 - Math.min(1, k * 4));
+      view.model.rotation.x = lerp(-0.35, 0.25, k);
     });
     view.model.rotation.x = 0;
-    view.model.scale.set(1, 1, 1);
+    view.model.position.y = 0.07;
     this.sfx.play('land');
     this.fx.dust(start.clone().setY(BOARD_Y + 0.03), 12);
     this.fx.sparks(start.clone().setY(BOARD_Y + 0.3), COLORS[token.seat].hex, 14, 2.5);
@@ -490,7 +507,7 @@ export class GameController {
     return this.world.cameraTo(saved.pos, saved.target, duration);
   }
 
-  // Full capture sequence: cinematic camera, attack, victim torn apart, reassembled and dragged home in chains.
+  // Full capture sequence: cinematic kill, the carcass is pulled together and dragged home in chains.
   async battle(atk, vic, V) {
     const A = atk.root.position.clone().setY(BOARD_Y);
     const camSaved = this.saveCamera();
@@ -510,13 +527,14 @@ export class GameController {
     const as0 = atk.root.scale.x;
 
     this.world.cinematic = true;
-    const hint = CAMERA_HINTS[atk.animal] ?? {};
-    const view = this.world.battleView(A, V, hint.dist, hint.height, hint.lift);
+    const D = this.director;
+    D.begin(A, V);
     const atkPlayer = atk.player;
     const vicPlayer = vic.player;
     this.hud.battleBanner(atkPlayer, vicPlayer);
+    this.sfx.play('heartbeat');
     await Promise.all([
-      this.world.cameraTo(view.pos, view.target, 0.7),
+      D.move({ at: D.at('mid'), yaw: 12, pitch: 20, dist: 3.2, lift: 0.3, fov: 38 }, 0.8),
       this.anim.tween(0.4, (k) => {
         vic.root.position.lerpVectors(v0, V, k);
         vic.root.scale.setScalar(lerp(vs0, 1, k));
@@ -525,14 +543,24 @@ export class GameController {
         vic.root.rotation.y = lerpAngle(vr0, faceV, k);
       }),
     ]);
-    const ctx = makeContext({ world: this.world, fx: this.fx, sfx: this.sfx, atk, vic, A, V });
-    await victimReacts(ctx);
-
-    // Team bases tuck away for the fight; the attacker's reappears under it on the victim's square.
+    const ctx = makeContext({
+      world: this.world,
+      fx: this.fx,
+      gore: this.gore,
+      sfx: this.sfx,
+      atk,
+      vic,
+      A,
+      V,
+      director: D,
+      onKill: () => this.hud.killTitle(atkPlayer, vicPlayer),
+    });
+    // team bases tuck away for the fight; the attacker's reappears under it on the victim's square
     this.anim.tween(0.2, (k) => {
       atk.base.scale.setScalar(1 - k);
       vic.base.scale.setScalar(1 - k);
     });
+    await victimReacts(ctx);
     await ATTACKS[atk.animal](ctx);
 
     // Re-root the attacker on the victim's square without a visual jump.
@@ -545,40 +573,42 @@ export class GameController {
     this.anim.tween(0.3, (k) => atk.base.scale.setScalar(k), Ease.outBack);
     vic.base.visible = false;
 
-    // victory pose
-    this.sfx.play('roar', { pitch: 1.2 });
-    this.hud.battleResult(atkPlayer, vicPlayer);
-    await this.anim.tween(0.45, (k) => {
-      atk.model.position.y = 0.07 + arc(k, 0.35);
-      atk.model.rotation.y = k * Math.PI * 2;
+    // the victor stands over the remains and roars
+    D.cut({ at: V, yaw: 25, pitch: 6, dist: 1.6, lift: 0.4, fov: 34 });
+    this.sfx.play('roar', { pitch: 0.9 });
+    atk.resetPose();
+    const head = atk.parts.head;
+    await this.anim.tween(0.9, (k) => {
+      const s = Math.sin(k * Math.PI);
+      if (head) head.rotation.x = -0.55 * s;
+      if (atk.parts.jaw) atk.parts.jaw.rotation.x = 0.75 * s;
+      if (atk.parts.setWings) atk.parts.setWings(s, 0.2 * s);
+      if (atk.parts.hood) atk.parts.hood.scale.set(1 + 0.5 * s, 1 + 0.2 * s, 1);
     });
-    atk.model.rotation.y = 0;
-    atk.model.position.y = 0.07;
     atk.resetPose();
     atk.idle = true;
 
-    // the beaten animal pulls itself back together, knocked out on its side, a little beyond the square
-    await this.anim.wait(0.35);
+    // the remains are dragged together into a mangled carcass, a little beyond the square
     const ko = V.clone().addScaledVector(ctx.dir, 0.62).setY(BOARD_Y + 0.17);
     vic.root.position.copy(ko);
     vic.root.rotation.set(0, faceV, Math.PI / 2);
     vic.root.scale.setScalar(1);
     vic.resetPose();
-    vic.restoreMaterials();
-    vic.tint(0x8f99ab, 0.5);
-    this.sfx.play('whoosh', { dur: 0.6 });
-    await this.fx.reassemble(vic, 0.9);
-    const stopDizzy = this.fx.dizzy(vic.model, 0.45);
-    this.sfx.play('sad');
+    D.move({ at: ko.clone().setY(BOARD_Y), yaw: 55, pitch: 24, dist: 1.9, lift: 0.15, fov: 34 }, 0.8);
+    this.sfx.play('squelch');
+    await this.gore.gather(vic, 1.0, 0.35);
+    vic.tint(this.gore.on ? 0x4a0508 : 0x6a7280, 0.4);
+    this.gore.pool(ko.clone(), 0.75, 2.5);
     await this.anim.wait(0.35);
 
-    await this.dragHome(vic, camSaved, stopDizzy);
+    await this.dragHome(vic, camSaved);
+    D.end();
     vic.busy = false;
     vic.idle = true;
     this.world.cinematic = false;
   }
 
-  async dragHome(vic, camSaved, onArrive = () => {}) {
+  async dragHome(vic, camSaved) {
     const { token } = vic;
     const cage = this.cages.get(token.id);
     const spot = yardSpot(token.seat, token.index);
@@ -619,6 +649,7 @@ export class GameController {
     const dur = clamp(dist * 0.16, 1.1, 2.4);
     this.sfx.play('chain', { dur });
     let lastDust = 0;
+    let lastSmear = null;
     const r0 = vic.root.rotation.y;
     const rTarget = Math.atan2(anchor.x - start.x, anchor.z - start.z) + Math.PI / 2;
     await this.anim.tween(dur, (k, raw, dt) => {
@@ -627,17 +658,20 @@ export class GameController {
       vic.root.position.y = BOARD_Y + 0.17 + Math.abs(Math.sin(raw * dur * 14)) * 0.05 * (1 - k);
       vic.root.rotation.y = lerpAngle(r0, rTarget, Math.min(1, k * 2));
       const b = body();
+      this.world.mood.center.copy(b);
       chain.setPath(arcPoints(anchor, b, 0.24 * (1 - e) + 0.05), 1, -e * dist);
       wrap.setPath(circlePoints(b, 0.26, BOARD_Y + 0.06, 18, 2.2, 0.26), 1);
       track(dt);
-      if (raw - lastDust > 0.08) {
+      if (raw - lastDust > 0.06) {
         lastDust = raw;
-        this.fx.dust(b.clone().setY(BOARD_Y + 0.03), 3);
-        if (Math.random() < 0.5) this.fx.sparks(b.clone().setY(BOARD_Y + 0.05), 0xffc04d, 3, 1.5);
+        // the carcass leaves a smeared trail of blood behind it
+        if (lastSmear) this.gore.smear(lastSmear, b, 0.24);
+        lastSmear = b.clone();
+        if (Math.random() < 0.4) this.gore.spray(b, null, { count: 2, speed: 0.4, up: 0.1 });
+        if (Math.random() < 0.3) this.fx.sparks(b.clone().setY(BOARD_Y + 0.05), 0xffc04d, 2, 1.2);
       }
     });
     chain.dispose();
-    onArrive();
     this.sfx.play('clank');
     // stand back up inside the yard and get locked in
     const p0 = vic.root.position.clone();
@@ -653,11 +687,16 @@ export class GameController {
     });
     wrap.dispose();
     vic.root.rotation.set(0, 0, 0);
+    const closing = cage.close(this.anim, this.sfx, this.fx);
+    await this.anim.wait(0.3);
+    // behind bars the animal is whole again, ready for its next release
     vic.restoreMaterials();
+    vic.clearWounds();
+    vic.resetPose();
     vic.base.visible = true;
     vic.base.scale.setScalar(0.01);
     this.anim.tween(0.25, (k) => vic.base.scale.setScalar(k), Ease.outBack);
-    await cage.close(this.anim, this.sfx, this.fx);
+    await closing;
     await this.anim.wait(0.25);
     await this.restoreCamera(camSaved, 0.8);
   }

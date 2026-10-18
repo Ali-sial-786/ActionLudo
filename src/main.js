@@ -6,6 +6,7 @@ import { Dice } from './render/dice.js';
 import { GameController } from './game/controller.js';
 import { Hud } from './ui/hud.js';
 import { sfx } from './engine/audio.js';
+import { goreSettings } from './render/gore.js';
 
 const world = new World(document.getElementById('stage'));
 const board = new BoardView(world.scene);
@@ -62,6 +63,7 @@ const hud = new Hud({
     if (!world.cinematic) world.resetView(0.6);
   },
   onMenu: () => toMenu(),
+  onGore: (on) => (goreSettings.enabled = on),
 });
 
 controller = new GameController({ world, board, fx, dice, sfx, hud });
