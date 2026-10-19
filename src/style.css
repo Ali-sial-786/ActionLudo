@@ -1492,8 +1492,10 @@ body.kids .banner .side.b {
 }
 
 /* --- capture title card: "✨ Swoop & Scoop! ✨" */
+/* lower third, so it never covers the comic words popping up above the animals */
 .banner.kid-kill {
-  top: 14%;
+  top: auto;
+  bottom: max(17%, 100px); /* the roll bar is ~85px tall */
 }
 
 .kid-card {

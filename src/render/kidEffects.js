@@ -376,11 +376,13 @@ class KidFx {
       }
       const halfW = (o.scale.x * 0.5) / Math.max(0.05, depth * tanH * cam.aspect);
       const mx = Math.max(0, 0.96 - halfW);
-      const my = Math.max(0, 0.94 - halfH);
+      // stay clear of the HUD: the player chips along the top and the roll bar along the bottom
+      const yTop = Math.max(0, 0.8 - halfH);
+      const yBot = Math.min(yTop, halfH - 0.74);
       ndc.x = THREE.MathUtils.clamp(ndc.x, -mx, mx);
-      ndc.y = THREE.MathUtils.clamp(ndc.y, -my, my);
+      ndc.y = THREE.MathUtils.clamp(ndc.y, yBot, yTop);
       for (const r of placed) {
-        if (Math.abs(ndc.x - r.x) < halfW + r.w && Math.abs(ndc.y - r.y) < halfH + r.h) ndc.y = Math.max(-my, r.y - r.h - halfH - 0.01);
+        if (Math.abs(ndc.x - r.x) < halfW + r.w && Math.abs(ndc.y - r.y) < halfH + r.h) ndc.y = Math.max(yBot, r.y - r.h - halfH - 0.01);
       }
       placed.push({ x: ndc.x, y: ndc.y, w: halfW, h: halfH });
       o.position.copy(ndc.unproject(cam));
