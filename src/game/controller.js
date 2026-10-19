@@ -546,37 +546,49 @@ export class GameController {
     if (Math.abs(s0 - 1) > 0.01) {
       await this.anim.tween(0.12, (k) => view.root.scale.setScalar(lerp(s0, 1, k)));
     }
-    // Kids hops are bouncier: higher arcs with squash & stretch.
-    const rest = view.model.userData.rest?.scale ?? new THREE.Vector3(1, 1, 1);
-    const squash = (sy) => {
-      const sxz = 1 / Math.sqrt(sy);
-      view.model.scale.set(rest.x * sxz, rest.y * sy, rest.z * sxz);
-    };
+    // Squash & stretch: a toy-like bounce in Kids mode, a subtler spring in Action.
+    const amt = kids ? 1 : 0.5;
+    const height = kids ? 0.42 : 0.32;
+    const crouch = 1 - 0.14 * amt;
+    const stretch = 1 + 0.12 * amt;
+
+    // anticipation: a quick crouch while turning to face the first square
+    const r0 = view.root.rotation.y;
+    const r1 = Math.atan2(path[0].x - view.root.position.x, path[0].z - view.root.position.z);
+    await this.anim.tween(0.09, (k) => {
+      view.root.rotation.y = lerpAngle(r0, r1, Ease.outCubic(k));
+      view.hopPose(lerp(1, crouch, Ease.outQuad(k)), 0.1 * k, 0);
+    });
+
     for (let i = 0; i < path.length; i++) {
       const from = view.root.position.clone();
       const to = path[i];
-      const r0 = view.root.rotation.y;
-      const r1 = Math.atan2(to.x - from.x, to.z - from.z);
+      const ra = view.root.rotation.y;
+      const rb = Math.atan2(to.x - from.x, to.z - from.z);
+      const turn = ((rb - ra + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
       this.sfx.play('hop', { step: i });
       await this.anim.tween(0.2, (k) => {
-        view.root.position.lerpVectors(from, to, k);
-        view.root.position.y = BOARD_Y + arc(k, kids ? 0.42 : 0.3);
-        view.root.rotation.y = lerpAngle(r0, r1, Math.min(1, k * 3));
-        view.model.rotation.x = Math.sin(k * Math.PI * 2) * -0.18;
-        if (kids) squash(0.86 + 0.26 * Math.sin(k * Math.PI));
+        // each hop launches and settles (eased), so the squares read as separate steps
+        view.root.position.lerpVectors(from, to, Ease.inOutSine(k));
+        view.root.position.y = BOARD_Y + arc(k, height);
+        view.root.rotation.y = lerpAngle(ra, rb, Math.min(1, k * 4));
+        // spring out of the crouch, stretch while moving fast, squash again on touchdown
+        let sy = 1 + (stretch - 1) * Math.abs(1 - 2 * k);
+        if (k < 0.15) sy = lerp(crouch, sy, k / 0.15);
+        else if (k > 0.88) sy = lerp(sy, crouch, (k - 0.88) / 0.12);
+        // nose up on take-off, down for the landing; lean into the track's corners
+        view.hopPose(sy, Math.sin(k * Math.PI * 2) * -0.18, -turn * 0.35 * Math.sin(k * Math.PI));
       });
-      view.model.rotation.x = 0;
     }
-    if (kids) {
-      this.sfx.play('boing');
-      this.fx.dust(view.root.position.clone().setY(BOARD_Y + 0.03), 6, 0xfff4e0);
-      // springy landing wobble back to rest
-      await this.anim.tween(0.22, (k) => squash(1 - Math.sin(k * Math.PI * 2) * 0.14 * (1 - k)));
-      view.model.scale.copy(rest);
-      return;
-    }
-    this.sfx.play('land');
-    this.fx.dust(view.root.position.clone().setY(BOARD_Y + 0.03), 6);
+
+    // touchdown: dust, then spring back up out of the squash
+    if (kids) this.sfx.play('boing');
+    else this.sfx.play('land');
+    this.fx.dust(view.root.position.clone().setY(BOARD_Y + 0.03), 6, kids ? 0xfff4e0 : undefined);
+    await this.anim.tween(kids ? 0.24 : 0.16, (k) => {
+      view.hopPose(1 - (1 - crouch) * Math.cos(k * Math.PI * 2.5) * (1 - k), 0, 0);
+    });
+    view.clearHopPose();
   }
 
   // A burst of fluttering paper confetti (Kids mode).
