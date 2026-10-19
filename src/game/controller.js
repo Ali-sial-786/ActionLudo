@@ -731,18 +731,10 @@ export class GameController {
     await this.happyDance(atk);
     atk.idle = true;
 
-    // the loser floats home; keep both it and its cage in frame
+    // the loser floats home in a bubble (kidFloatHome keeps both it and its cage in frame)
     this.hud.toast('Bonk! Back to the cage! 🎈');
-    const shot = () => {
-      const b = vic.root.position.clone();
-      const center = b.clone().add(spot).multiplyScalar(0.5);
-      center.y = BOARD_Y + 0.3 + Math.max(0, b.y - BOARD_Y) * 0.4;
-      return this.world.frameView(center, Math.max(1.7, b.distanceTo(spot) * 0.5 + 1.0), 46);
-    };
-    const stopTracking = this.anim.every((dt) => this.world.follow(shot(), dt, 3));
     this.fx.ring(spot, { color: COLORS[token.seat].hex, from: 0.2, to: 1.1, duration: 0.6 });
     await kidFloatHome({ world: this.world, anim: this.anim, fx: this.fx, sfx: this.sfx, vic, spot });
-    stopTracking();
 
     // safe and sound in the yard, good as new
     vic.root.position.copy(spot);
