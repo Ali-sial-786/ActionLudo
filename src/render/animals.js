@@ -12,12 +12,16 @@ const cached = (key, make) => {
   return geoCache.get(key);
 };
 
+// Every shape is built at unit size (bounds about [-1, 1]) and sized with mesh.scale, so wounds and
+// other effects can treat any part as a unit blob in its local space.
 const G = {
-  sphere: () => cached('sphere', () => new THREE.SphereGeometry(1, 24, 16)),
+  sphere: () => cached('sphere', () => new THREE.SphereGeometry(1, 32, 22)),
+  // small details (eyes, noses, knuckles): fewer segments are invisible at their size
+  small: () => cached('small', () => new THREE.SphereGeometry(1, 16, 12)),
   // poles along z so canvas stripes / countershading wrap the torso correctly
   spine: () =>
     cached('spine', () => {
-      const g = new THREE.SphereGeometry(1, 28, 18);
+      const g = new THREE.SphereGeometry(1, 32, 22);
       g.rotateX(Math.PI / 2);
       return g;
     }),
@@ -25,8 +29,148 @@ const G = {
   cone: (seg = 12) => cached(`cone${seg}`, () => new THREE.ConeGeometry(1, 1, seg)),
   box: () => cached('box', () => new THREE.BoxGeometry(1, 1, 1)),
   torus: (tube = 0.3, arc = Math.PI * 2) =>
-    cached(`torus${tube}:${arc.toFixed(3)}`, () => new THREE.TorusGeometry(1, tube, 14, 40, arc)),
+    cached(`torus${tube}:${arc.toFixed(3)}`, () => new THREE.TorusGeometry(1, tube, 16, 48, arc)),
+  capsule: (q1, q2, bulge, radial) => cached(`cap:${q1}:${q2}:${bulge}:${radial}`, () => capsuleGeometry(q1, q2, bulge, radial)),
 };
+
+// Tapered capsule along +y for a segment of length 1: a sphere of radius q1 at y = 0 joined by the
+// common tangent to a sphere of radius q2 at y = 1, the middle swelling by `bulge` (a muscle belly).
+// Returned normalised to unit bounds with { geo, R, H, c } to size and place it.
+function capsuleGeometry(q1, q2, bulge, radial) {
+  const a = Math.asin(THREE.MathUtils.clamp(q1 - q2, -0.95, 0.95));
+  const steps = 6;
+  const pts = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = -Math.PI / 2 + (a + Math.PI / 2) * (i / steps);
+    pts.push(new THREE.Vector2(Math.cos(t) * q1, Math.sin(t) * q1));
+  }
+  const y0 = pts[pts.length - 1].y;
+  const top = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = a + (Math.PI / 2 - a) * (i / steps);
+    top.push(new THREE.Vector2(Math.cos(t) * q2, 1 + Math.sin(t) * q2));
+  }
+  const y1 = top[0].y;
+  // straight (tangent) section, subdivided so the bulge can curve it
+  const mids = 6;
+  for (let i = 1; i < mids; i++) {
+    const k = i / mids;
+    const y = y0 + (y1 - y0) * k;
+    const x = pts[pts.length - 1].x + (top[0].x - pts[pts.length - 1].x) * k;
+    pts.push(new THREE.Vector2(x * (1 + bulge * Math.sin(Math.PI * k)), y));
+  }
+  pts.push(...top);
+  pts[0].x = 0;
+  pts[pts.length - 1].x = 0;
+  const lo = -q1;
+  const hi = 1 + q2;
+  const c = (lo + hi) / 2;
+  const H = (hi - lo) / 2;
+  const R = Math.max(...pts.map((p) => p.x));
+  const geo = new THREE.LatheGeometry(
+    pts.map((p) => new THREE.Vector2(p.x / R, (p.y - c) / H)),
+    radial,
+  );
+  return { geo, R, H, c };
+}
+
+// Average the normals of coincident vertices (UV seams, poles) so smooth shells shade seamlessly.
+function weldNormals(geo) {
+  geo.computeVertexNormals();
+  const p = geo.attributes.position;
+  const n = geo.attributes.normal;
+  const groups = new Map();
+  for (let i = 0; i < p.count; i++) {
+    const key = `${p.getX(i).toFixed(4)},${p.getY(i).toFixed(4)},${p.getZ(i).toFixed(4)}`;
+    let g = groups.get(key);
+    if (!g) groups.set(key, (g = []));
+    g.push(i);
+  }
+  const v = new THREE.Vector3();
+  for (const ids of groups.values()) {
+    if (ids.length < 2) continue;
+    v.set(0, 0, 0);
+    for (const i of ids) v.add(new THREE.Vector3(n.getX(i), n.getY(i), n.getZ(i)));
+    v.normalize();
+    for (const i of ids) n.setXYZ(i, v.x, v.y, v.z);
+  }
+  n.needsUpdate = true;
+}
+
+// Polynomial smooth max / min (k = blend width in model units).
+function smax(a, b, k) {
+  if (a === -Infinity) return b;
+  const h = Math.max(k - Math.abs(a - b), 0) / k;
+  return Math.max(a, b) + h * h * k * 0.25;
+}
+const smin = (a, b, k) => (a === Infinity ? b : -smax(-a, -b, k));
+
+// One smooth torso: the blended union of axis-aligned ellipsoids { c: [0, y, z], r: [rx, ry, rz] }
+// strung along the spine, as a single mesh with spine-sphere UVs (stripes and countershading wrap
+// it like they wrapped the old separate chest / hip spheres) -- no lumps where they used to overlap.
+// Cross-section of that union at z: half width w and the top / bottom of the outline.
+function shellProfile(blobs, z, k = 0.04) {
+  let top = -Infinity;
+  let bot = Infinity;
+  let w = -Infinity;
+  for (const b of blobs) {
+    const u = (z - b.c[2]) / b.r[2];
+    if (Math.abs(u) >= 1) continue;
+    const f = Math.sqrt(1 - u * u);
+    top = smax(top, b.c[1] + b.r[1] * f, k);
+    bot = smin(bot, b.c[1] - b.r[1] * f, k);
+    w = smax(w, b.r[0] * f, k);
+  }
+  if (w === -Infinity) {
+    // exactly at a tip
+    const end = blobs.reduce((best, b) => (Math.abs(b.c[2] - z) < Math.abs(best.c[2] - z) ? b : best));
+    return { top: end.c[1], bot: end.c[1], w: 0 };
+  }
+  return { top, bot, w };
+}
+
+function shellShape(key, blobs, k = 0.04) {
+  return cached(`shell:${key}`, () => {
+    const z0 = Math.min(...blobs.map((b) => b.c[2] - b.r[2]));
+    const z1 = Math.max(...blobs.map((b) => b.c[2] + b.r[2]));
+    const geo = new THREE.SphereGeometry(1, 40, 36);
+    geo.rotateX(Math.PI / 2);
+    const p = geo.attributes.position;
+    const box = new THREE.Box3();
+    const v = new THREE.Vector3();
+    for (let i = 0; i < p.count; i++) {
+      const x = p.getX(i);
+      const y = p.getY(i);
+      const z = z0 + ((p.getZ(i) + 1) / 2) * (z1 - z0);
+      const { top, bot, w } = shellProfile(blobs, z, k);
+      const rho = Math.hypot(x, y);
+      const dx = rho > 1e-6 ? x / rho : 0;
+      const dy = rho > 1e-6 ? y / rho : 0;
+      v.set(dx * w, (top + bot) / 2 + (dy * (top - bot)) / 2, z);
+      p.setXYZ(i, v.x, v.y, v.z);
+      box.expandByPoint(v);
+    }
+    const c = box.getCenter(new THREE.Vector3());
+    const half = box.getSize(new THREE.Vector3()).multiplyScalar(0.5);
+    for (let i = 0; i < p.count; i++) {
+      p.setXYZ(i, (p.getX(i) - c.x) / half.x, (p.getY(i) - c.y) / half.y, (p.getZ(i) - c.z) / half.z);
+    }
+    weldNormals(geo);
+    geo.computeBoundingSphere();
+    return { geo, c, half };
+  });
+}
+
+function shell(parent, material, key, blobs, k) {
+  const { geo, c, half } = shellShape(key, blobs, k);
+  const m = new THREE.Mesh(geo, M(material));
+  m.position.copy(c);
+  m.scale.copy(half);
+  m.castShadow = true;
+  m.receiveShadow = true;
+  parent.add(m);
+  return m;
+}
 
 const matCache = new Map();
 export function mat(color, opts = {}) {
@@ -61,7 +205,7 @@ function add(parent, geo, material, pos = [0, 0, 0], scale = [1, 1, 1], rot = [0
   return m;
 }
 
-const ell = (parent, material, pos, radii, rot = [0, 0, 0]) => add(parent, G.sphere(), material, pos, radii, rot);
+const ell = (parent, material, pos, radii, rot = [0, 0, 0]) => add(parent, Math.max(...radii) < 0.022 ? G.small() : G.sphere(), material, pos, radii, rot);
 const torso = (parent, material, pos, radii, rot = [0, 0, 0]) => add(parent, G.spine(), material, pos, radii, rot);
 const cone = (parent, material, pos, scale, rot = [0, 0, 0], seg = 10) => add(parent, G.cone(seg), material, pos, scale, rot);
 
@@ -84,20 +228,27 @@ function bone(parent, material, a, b, r, rz = r) {
   return m;
 }
 
-// Tapered cylinder from a to b.
-function limb(parent, material, a, b, r, rEnd = r) {
+// Smooth tapered capsule from a to b (legs, tails, chitin segments): radius r1 at a, r2 at b, round
+// ends that overlap neatly at the joints, optionally swelling in the middle like a muscle.
+function seg(parent, material, a, b, r1, r2 = r1, bulge = 0, radial = 16) {
   _a.set(...a);
   _b.set(...b);
-  const len = _a.distanceTo(_b);
-  const taper = Math.round((rEnd / r) * 20) / 20;
-  const m = new THREE.Mesh(G.cyl(taper), M(material));
-  m.position.copy(_a).add(_b).multiplyScalar(0.5);
-  m.quaternion.setFromUnitVectors(_up, _b.clone().sub(_a).normalize());
-  m.scale.set(r, len, r);
+  const len = Math.max(1e-4, _a.distanceTo(_b));
+  const q = (x) => Math.round((x / len) * 400) / 400;
+  const { geo, R, H, c } = G.capsule(q(r1), q(r2), bulge, radial);
+  const dir = _b.clone().sub(_a).normalize();
+  const m = new THREE.Mesh(geo, M(material));
+  m.position.copy(_a).addScaledVector(dir, c * len);
+  m.quaternion.setFromUnitVectors(_up, dir);
+  m.scale.set(R * len, H * len, R * len);
   m.castShadow = true;
+  m.receiveShadow = true;
   parent.add(m);
   return m;
 }
+
+// Thin tapered rod from a to b (talons, insect legs, tongue), with rounded ends.
+const limb = (parent, material, a, b, r, rEnd = r) => seg(parent, material, a, b, r, rEnd, 0, 12);
 
 function pivot(parent, pos = [0, 0, 0], rot = [0, 0, 0]) {
   const g = new THREE.Group();
@@ -113,12 +264,24 @@ const mirror = (fn) => {
 };
 
 const EYE_GLOSS = { roughness: 0.08, metalness: 0.0 };
-// Small, deep-set predator eye: coloured iris, dark pupil, no cartoon whites.
+// Catch-light: a speck of unlit white, so the eyes read as wet and alive even in a dark kill-cam.
+const GLINT = new THREE.MeshBasicMaterial({ color: 0xfff6ea });
+function glint(parent, pos, r) {
+  const m = new THREE.Mesh(G.small(), GLINT);
+  m.position.set(...pos);
+  m.scale.setScalar(r);
+  m.userData.noGore = true;
+  parent.add(m);
+  return m;
+}
+
+// Small, deep-set predator eye: coloured iris, dark pupil, no cartoon whites, a glint up front.
 function eye(parent, [x, y, z], r, iris, { slit = false } = {}) {
   const s = Math.sign(x) || 1;
   ell(parent, mat(0x140806, EYE_GLOSS), [x, y, z], [r * 1.12, r * 1.05, r * 1.0]);
-  ell(parent, mat(iris, { ...EYE_GLOSS, emissive: iris, emissiveIntensity: 0.18 }), [x + s * r * 0.18, y, z + r * 0.42], [r * 0.82, r * 0.82, r * 0.6]);
+  ell(parent, mat(iris, { ...EYE_GLOSS, emissive: iris, emissiveIntensity: 0.22 }), [x + s * r * 0.18, y, z + r * 0.42], [r * 0.82, r * 0.82, r * 0.6]);
   ell(parent, mat(0x050303, EYE_GLOSS), [x + s * r * 0.26, y, z + r * 0.72], slit ? [r * 0.14, r * 0.62, r * 0.25] : [r * 0.42, r * 0.42, r * 0.25]);
+  glint(parent, [x + s * r * 0.08, y + r * 0.34, z + r * 0.93], r * 0.17);
 }
 
 function fang(parent, pos, len, r, down = true, tilt = 0) {
@@ -132,15 +295,57 @@ function teethArc(parent, { y, z, radius, count, len, r, down, spread = 2.0 }) {
   }
 }
 
+// ---------------------------------------------------------------- idle motion helpers
+// Idles are pure functions of time so every token can share them. Instead of endless sine sweeps
+// (which read as floaty), animals hold a pose, then shift to a new one with a quick eased move.
+const fract = (x) => x - Math.floor(x);
+const noise1 = (n) => fract(Math.sin(n * 127.1 + 311.7) * 43758.5453) * 2 - 1;
+const easeIO = (k) => (k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2);
+
+// Look-around value in [-1, 1]: holds for ~`hold` s, then turns to a new target in `turn` s.
+function glance(t, seed, hold = 2.4, turn = 0.4) {
+  const w = t + Math.sin(t * 0.37 + seed) * hold * 0.35; // uneven rhythm
+  const i = Math.floor(w / hold);
+  const f = w - i * hold;
+  const a = noise1(i + seed * 17.3);
+  const b = noise1(i + 1 + seed * 17.3);
+  const k = Math.min(1, Math.max(0, (f - (hold - turn)) / turn));
+  return a + (b - a) * easeIO(k);
+}
+
+// Breathing cycle in [0, 1]: a quicker inhale, a slower exhale, `rate` breaths per second.
+function breath(t, rate) {
+  const ph = fract(t * rate);
+  const k = ph < 0.4 ? ph / 0.4 : 1 - (ph - 0.4) / 0.6;
+  return k * k * (3 - 2 * k);
+}
+
+// Short twitch envelope (0 -> 1 -> 0) once every `period` s, lasting `len` s.
+function twitch(t, period, len, seed = 0) {
+  const ph = ((t + seed) % period + period) % period;
+  return ph < len ? Math.sin((ph / len) * Math.PI) : 0;
+}
+
+// Scale a mesh relative to its rest size (breathing chest).
+function breathe(mesh, gx, gy = gx, gz = 0) {
+  const b = mesh.userData.rest?.scale;
+  if (b) mesh.scale.set(b.x * (1 + gx), b.y * (1 + gy), b.z * (1 + gz));
+}
+
 // ---------------------------------------------------------------- shared quadruped skeleton
 function quadruped(cfg) {
   const model = new THREE.Group();
   const p = {};
   const body = (p.body = pivot(model));
   const { coat, limbMat } = cfg;
-  torso(body, coat, [0, cfg.bodyY, cfg.chestZ], cfg.chestR);
-  torso(body, coat, [0, cfg.bodyY - 0.005, cfg.hipZ], cfg.hipR);
-  torso(body, coat, [0, cfg.bodyY - 0.015, (cfg.chestZ + cfg.hipZ) / 2], [cfg.chestR[0] * 0.92, cfg.chestR[1] * 0.9, (cfg.chestZ - cfg.hipZ) * 0.7]);
+  // chest, hips and belly blended into one smooth torso (plus e.g. a shoulder hump)
+  const blobs = [
+    { c: [0, cfg.bodyY, cfg.chestZ], r: cfg.chestR },
+    { c: [0, cfg.bodyY - 0.005, cfg.hipZ], r: cfg.hipR },
+    { c: [0, cfg.bodyY - 0.015, (cfg.chestZ + cfg.hipZ) / 2], r: [cfg.chestR[0] * 0.92, cfg.chestR[1] * 0.9, (cfg.chestZ - cfg.hipZ) * 0.7] },
+    ...(cfg.blobs ?? []),
+  ];
+  const chest = shell(body, coat, cfg.key, blobs);
   // neck
   bone(body, limbMat, cfg.neck[0], cfg.neck[1], cfg.neckR, cfg.neckR * 0.95);
   const top = cfg.bodyY - cfg.chestR[1] * 0.25;
@@ -155,22 +360,23 @@ function quadruped(cfg) {
     const leg = (p[name] = pivot(body, [x, top, z]));
     const h = top;
     const pawY = -(h - cfg.pawR * 0.6);
+    const R = cfg.legR;
     if (front) {
-      // shoulder blade + upper arm + forearm
-      ell(leg, coat, [s * -0.01, 0.03, 0], [cfg.legR * 1.6, cfg.legR * 2.4, cfg.legR * 2]);
+      // shoulder blade (mostly tucked into the torso) + muscular upper arm + slimmer forearm
+      ell(leg, coat, [s * -0.018, 0.02, 0], [R * 1.4, R * 2.3, R * 1.9]);
       const elbow = [s * 0.005, -h * 0.42, -0.03];
       const wrist = [0, pawY + cfg.pawR * 0.8, 0.015];
-      bone(leg, limbMat, [0, 0, 0], elbow, cfg.legR * 1.15);
-      bone(leg, limbMat, elbow, wrist, cfg.legR * 0.8);
+      seg(leg, limbMat, [0, 0, 0], elbow, R * 1.25, R * 0.82, 0.1);
+      seg(leg, limbMat, elbow, wrist, R * 0.8, R * 0.6, 0.06);
     } else {
       // haunch + thigh + shin + hock (digitigrade)
-      ell(leg, coat, [s * -0.01, 0.0, 0.0], [cfg.legR * 1.7, cfg.legR * 2.6, cfg.legR * 2.3]);
+      ell(leg, coat, [s * -0.018, 0.0, 0.0], [R * 1.5, R * 2.5, R * 2.2]);
       const knee = [0, -h * 0.32, 0.05];
       const hock = [0, -h * 0.66, -0.05];
       const foot = [0, pawY + cfg.pawR * 0.8, -0.005];
-      bone(leg, limbMat, [0, 0, 0], knee, cfg.legR * 1.2);
-      bone(leg, limbMat, knee, hock, cfg.legR * 0.85);
-      bone(leg, limbMat, hock, foot, cfg.legR * 0.7);
+      seg(leg, limbMat, [0, 0, 0], knee, R * 1.4, R * 0.88, 0.12);
+      seg(leg, limbMat, knee, hock, R * 0.86, R * 0.62, 0.06);
+      seg(leg, limbMat, hock, foot, R * 0.62, R * 0.55);
     }
     ell(leg, cfg.pawMat ?? limbMat, [0, pawY, 0.03], [cfg.pawR * 1.05, cfg.pawR * 0.6, cfg.pawR * 1.35]);
     if (cfg.claws) {
@@ -181,7 +387,7 @@ function quadruped(cfg) {
   }
   p.head = pivot(body, cfg.headPos);
   p.tail = pivot(body, cfg.tailPos);
-  return { model, p, body };
+  return { model, p, body, chest, blobs };
 }
 
 // ---------------------------------------------------------------- Tiger
@@ -208,10 +414,11 @@ function buildTiger() {
     }),
   );
   const cream = texMat('tigerCream', furMaps('tigerCream', { base: 0xf1e6d2, dark: 0xc9b9a0, light: 0xffffff }));
-  const { model, p } = quadruped({
+  const { model, p, chest } = quadruped({
+    key: 'tiger',
     coat,
     limbMat: fur,
-    pawMat: cream,
+    pawMat: fur,
     bodyY: 0.36,
     chestR: [0.145, 0.15, 0.17],
     chestZ: 0.1,
@@ -250,16 +457,21 @@ function buildTiger() {
   ell(p.jaw, mat(0xb85a64, { roughness: 0.4 }), [0, 0.0, 0.055], [0.03, 0.008, 0.05]);
   mirror((s) => fang(p.jaw, [s * 0.024, 0.002, 0.1], 0.035, 0.007, false));
 
-  bone(p.tail, fur, [0, 0, 0], [0, -0.08, -0.14], 0.03, 0.03);
+  seg(p.tail, fur, [0, 0, 0], [0, -0.08, -0.14], 0.03, 0.025);
   p.tail2 = pivot(p.tail, [0, -0.08, -0.14]);
-  bone(p.tail2, fur, [0, 0, 0], [0, -0.02, -0.15], 0.024);
+  seg(p.tail2, fur, [0, 0, 0], [0, -0.02, -0.15], 0.025, 0.021);
   ell(p.tail2, mat(0x120c08), [0, -0.025, -0.17], [0.024, 0.024, 0.04]);
 
   const idle = (t) => {
-    p.tail.rotation.y = Math.sin(t * 1.2) * 0.35;
-    p.tail2.rotation.x = -0.6 + Math.sin(t * 1.9) * 0.25;
-    p.head.rotation.y = Math.sin(t * 0.45) * 0.3;
-    p.body.scale.y = 1 + Math.sin(t * 2.2) * 0.01;
+    // lazy S-curve tail with an occasional flick of the tip
+    const flick = twitch(t, 4.3, 0.5, 1.1);
+    p.tail.rotation.y = Math.sin(t * 0.9) * 0.28;
+    p.tail2.rotation.y = Math.sin(t * 0.9 - 0.9) * 0.3 + flick * 0.4;
+    p.tail2.rotation.x = -0.6 + Math.sin(t * 1.3) * 0.12 - flick * 0.2;
+    p.head.rotation.y = glance(t, 1) * 0.32;
+    p.head.rotation.x = glance(t, 2, 3.1, 0.5) * 0.07;
+    const b = breath(t, 0.32);
+    breathe(chest, b * 0.018, b * 0.024);
   };
   return { model, parts: p, idle };
 }
@@ -269,7 +481,8 @@ function buildWolf() {
   const coat = texMat('wolfCoat', furMaps('wolfCoat', { base: 0x7a7066, dark: 0x3b3530, light: 0xb3aa9c, belly: 0xd9cfbf, back: 0x45403a, spine: true, len: 10 }));
   const fur = texMat('wolfFur', furMaps('wolfFur', { base: 0x7a7066, dark: 0x3b3530, light: 0xb3aa9c, len: 9 }));
   const pale = texMat('wolfPale', furMaps('wolfPale', { base: 0xd6ccbc, dark: 0xa59a88, light: 0xf0e8dc, len: 8 }));
-  const { model, p, body } = quadruped({
+  const { model, p, body, chest } = quadruped({
+    key: 'wolf',
     coat,
     limbMat: fur,
     pawMat: pale,
@@ -313,10 +526,14 @@ function buildWolf() {
   ell(p.tail, mat(0x2a2420), [0, -0.21, -0.17], [0.035, 0.05, 0.035], [0.7, 0, 0]);
 
   const idle = (t) => {
-    p.tail.rotation.y = Math.sin(t * 2.4) * 0.25;
-    p.head.rotation.y = Math.sin(t * 0.55) * 0.35;
-    p.head.rotation.x = Math.sin(t * 0.8) * 0.08;
-    p.body.scale.y = 1 + Math.sin(t * 2.5) * 0.01;
+    // alert: quick glances, a low tail sway and a slight pant
+    p.tail.rotation.y = Math.sin(t * 1.6) * 0.2;
+    p.tail.rotation.x = Math.sin(t * 0.7) * 0.06;
+    p.head.rotation.y = glance(t, 3, 2.0, 0.3) * 0.38;
+    p.head.rotation.x = glance(t, 4, 2.7, 0.4) * 0.08;
+    const b = breath(t, 0.42);
+    breathe(chest, b * 0.016, b * 0.022);
+    p.jaw.rotation.x = 0.04 + b * 0.05;
   };
   return { model, parts: p, idle };
 }
@@ -326,10 +543,13 @@ function buildBear() {
   const coat = texMat('bearCoat', furMaps('bearCoat', { base: 0x6a4729, dark: 0x3c2614, light: 0x9c7648, back: 0x5b3c22, belly: 0x56381f, spine: true, len: 12, strokes: 3400 }));
   const fur = texMat('bearFur', furMaps('bearFur', { base: 0x63422a, dark: 0x3c2614, light: 0x8e6a42, len: 11, strokes: 3400 }));
   const muzzle = texMat('bearMuzzle', furMaps('bearMuzzle', { base: 0xa07a52, dark: 0x6b4a2c, light: 0xc49c70, len: 5 }));
-  const { model, p, body } = quadruped({
+  const { model, p, chest } = quadruped({
+    key: 'bear',
     coat,
     limbMat: fur,
     pawMat: mat(0x2e1f14),
+    // the grizzly's shoulder hump, blended into the back
+    blobs: [{ c: [0, 0.5, 0.11], r: [0.15, 0.1, 0.13] }],
     bodyY: 0.35,
     chestR: [0.19, 0.19, 0.19],
     chestZ: 0.08,
@@ -348,7 +568,6 @@ function buildBear() {
     headPos: [0, 0.42, 0.3],
     tailPos: [0, 0.38, -0.29],
   });
-  ell(body, coat, [0, 0.5, 0.11], [0.15, 0.1, 0.13]);
   const h = p.head;
   ell(h, fur, [0, 0.0, 0], [0.12, 0.105, 0.11]);
   ell(h, muzzle, [0, -0.03, 0.1], [0.06, 0.05, 0.07]);
@@ -368,9 +587,12 @@ function buildBear() {
   ell(p.tail, fur, [0, -0.02, -0.02], [0.04, 0.04, 0.04]);
 
   const idle = (t) => {
-    p.head.rotation.x = 0.1 + Math.sin(t * 1.0) * 0.06;
-    p.head.rotation.y = Math.sin(t * 0.4) * 0.25;
-    p.body.scale.y = 1 + Math.sin(t * 1.6) * 0.014;
+    // heavy and slow: deep breaths, the head swings low and sniffs now and then
+    const b = breath(t, 0.26);
+    breathe(chest, b * 0.02, b * 0.028);
+    const sniff = twitch(t, 5.1, 0.6, 2);
+    p.head.rotation.x = 0.1 + glance(t, 5, 3.2, 0.7) * 0.06 + Math.sin(t * 14) * 0.02 * sniff;
+    p.head.rotation.y = glance(t, 6, 3.6, 0.8) * 0.26;
   };
   return { model, parts: p, idle };
 }
@@ -379,7 +601,8 @@ function buildBear() {
 function buildRhino() {
   const hide = texMat('rhinoHide', skinMaps('rhinoHide', { base: 0x7a746d, dark: 0x45403b, light: 0x9a948c, wrinkles: 140 }), { bumpScale: 2.2, roughness: 0.92 });
   const horn = texMat('rhinoHorn', skinMaps('rhinoHorn', { base: 0xb8ab92, dark: 0x6f6452, light: 0xd8ccb2, wrinkles: 30 }), { roughness: 0.55 });
-  const { model, p, body } = quadruped({
+  const { model, p, body, chest, blobs } = quadruped({
+    key: 'rhino',
     coat: hide,
     limbMat: hide,
     pawMat: hide,
@@ -399,7 +622,11 @@ function buildRhino() {
     headPos: [0, 0.34, 0.3],
     tailPos: [0, 0.38, -0.31],
   });
-  for (const z of [0.15, -0.05]) torso(body, hide, [0, 0.345, z], [0.186, 0.176, 0.045]);
+  // two thick folds of armour-plated hide, standing just proud of the torso
+  for (const z of [0.15, -0.05]) {
+    const { top, bot, w } = shellProfile(blobs, z);
+    torso(body, hide, [0, (top + bot) / 2, z], [w + 0.009, (top - bot) / 2 + 0.008, 0.04]);
+  }
   mirror((s) => {
     for (const [z] of [[0.17], [-0.18]]) {
       for (let k = -1; k <= 1; k++) ell(body, horn, [s * 0.105 + k * 0.025, 0.02, z + 0.06], [0.016, 0.014, 0.014]);
@@ -415,13 +642,17 @@ function buildRhino() {
     eye(h, [s * 0.085, 0.015, 0.07], 0.011, 0x2a1a10);
     ell(h, mat(0x1c1612), [s * 0.03, -0.075, 0.26], [0.012, 0.01, 0.01]);
   });
-  bone(p.tail, hide, [0, 0, 0], [0, -0.14, -0.04], 0.016, 0.012);
+  seg(p.tail, hide, [0, 0, 0], [0, -0.14, -0.04], 0.016, 0.01);
   ell(p.tail, mat(0x1c1612), [0, -0.16, -0.045], [0.02, 0.035, 0.018]);
 
   const idle = (t) => {
-    p.head.rotation.x = Math.sin(t * 0.8) * 0.07;
-    p.tail.rotation.z = Math.sin(t * 2.6) * 0.4;
-    p.body.scale.y = 1 + Math.sin(t * 1.4) * 0.01;
+    // mostly still; a snort-and-toss of the horn and a tail swat every few seconds
+    const toss = twitch(t, 4.7, 0.55, 0.8);
+    p.head.rotation.x = glance(t, 7, 3.4, 0.6) * 0.05 - toss * 0.12;
+    p.head.rotation.y = glance(t, 8, 4.1, 0.7) * 0.12;
+    p.tail.rotation.z = Math.sin(t * 2.2) * 0.12 + twitch(t, 3.3, 0.45) * Math.sin(t * 20) * 0.45;
+    const b = breath(t, 0.24);
+    breathe(chest, b * 0.014, b * 0.02);
   };
   return { model, parts: p, idle };
 }
@@ -461,23 +692,28 @@ function buildGorilla() {
 
   mirror((s) => {
     const arm = pivot(body, [s * 0.19, 0.5, 0.08]);
-    bone(arm, fur, [0, 0, 0], [s * 0.05, -0.2, 0.07], 0.06);
-    bone(arm, fur, [s * 0.05, -0.2, 0.07], [s * 0.06, -0.38, 0.13], 0.052);
+    seg(arm, fur, [0, 0, 0], [s * 0.05, -0.2, 0.07], 0.068, 0.05, 0.12);
+    seg(arm, fur, [s * 0.05, -0.2, 0.07], [s * 0.06, -0.38, 0.13], 0.054, 0.042, 0.1);
     ell(arm, skin, [s * 0.06, -0.405, 0.145], [0.05, 0.04, 0.062]);
     for (let k = -1; k <= 1; k++) ell(arm, skin, [s * 0.06 + k * 0.022, -0.42, 0.19], [0.014, 0.014, 0.02]);
     p[s > 0 ? 'armL' : 'armR'] = arm;
     const leg = pivot(body, [s * 0.1, 0.25, -0.15]);
-    bone(leg, fur, [0, 0, 0], [0, -0.1, 0.06], 0.06);
-    bone(leg, fur, [0, -0.1, 0.06], [0, -0.2, 0.02], 0.045);
+    seg(leg, fur, [0, 0, 0], [0, -0.1, 0.06], 0.062, 0.045, 0.1);
+    seg(leg, fur, [0, -0.1, 0.06], [0, -0.2, 0.02], 0.044, 0.036);
     ell(leg, skin, [0, -0.215, 0.05], [0.045, 0.022, 0.075]);
     p[s > 0 ? 'legL' : 'legR'] = leg;
   });
 
   const idle = (t) => {
-    p.body.scale.set(1 + Math.sin(t * 1.8) * 0.012, 1, 1 + Math.sin(t * 1.8) * 0.012);
-    p.head.rotation.y = Math.sin(t * 0.45) * 0.35;
-    p.armL.rotation.z = Math.sin(t * 1.0) * 0.04;
-    p.armR.rotation.z = -Math.sin(t * 1.0) * 0.04;
+    const b = breath(t, 0.3);
+    p.body.scale.set(1 + b * 0.016, 1 + b * 0.004, 1 + b * 0.016);
+    p.head.rotation.y = glance(t, 9, 2.8, 0.5) * 0.36;
+    p.head.rotation.x = glance(t, 10, 3.3, 0.5) * 0.06;
+    // shift weight between the knuckles
+    const shift = glance(t, 11, 4.4, 1.0) * 0.035;
+    p.armL.rotation.z = shift;
+    p.armR.rotation.z = shift;
+    p.body.rotation.z = -shift * 0.4;
   };
   return { model, parts: p, idle };
 }
@@ -514,17 +750,18 @@ function buildEagle() {
   cone(p.jaw, YEL, [0, -0.005, 0.045], [0.026, 0.06, 0.012], [Math.PI / 2, 0, 0], 10);
 
   mirror((s) => {
+    // spine-mapped so the feather rows run front-to-back instead of converging on the wing top
     const w = pivot(body, [s * 0.13, 0.47, -0.03], [0, s * 0.3, -s * 1.3]);
-    ell(w, wingTex, [s * 0.14, 0, 0], [0.16, 0.025, 0.12]);
-    ell(w, wingTex, [s * 0.3, 0, -0.02], [0.13, 0.02, 0.1]);
+    torso(w, wingTex, [s * 0.14, 0, 0], [0.16, 0.025, 0.12]);
+    torso(w, wingTex, [s * 0.3, 0, -0.02], [0.13, 0.02, 0.1]);
     for (let k = 0; k < 6; k++) {
-      ell(w, wingTex, [s * (0.42 + k * 0.012), 0, -0.07 + k * 0.03], [0.1, 0.01, 0.022], [0, s * (0.35 - k * 0.12), 0]);
+      torso(w, wingTex, [s * (0.42 + k * 0.012), 0, -0.07 + k * 0.03], [0.1, 0.01, 0.022], [0, s * (0.35 - k * 0.12), 0]);
     }
     p[s > 0 ? 'wingL' : 'wingR'] = w;
   });
 
   p.tail = pivot(body, [0, 0.22, -0.13]);
-  for (let k = -2; k <= 2; k++) ell(p.tail, white, [k * 0.025, -0.04, -0.1], [0.024, 0.008, 0.11], [-0.6, k * 0.12, 0]);
+  for (let k = -2; k <= 2; k++) torso(p.tail, white, [k * 0.025, -0.04, -0.1], [0.024, 0.008, 0.11], [-0.6, k * 0.12, 0]);
 
   mirror((s) => limb(body, LEG, [s * 0.06, 0.13, 0.03], [s * 0.06, 0.03, 0.05], 0.022, 0.018));
   p.talons = pivot(body, [0, 0.02, 0.06]);
@@ -546,10 +783,14 @@ function buildEagle() {
   };
 
   const idle = (t) => {
-    p.head.rotation.y = Math.sin(t * 0.6) * 0.5;
-    p.head.rotation.x = Math.sin(t * 1.2) * 0.06;
-    p.body.position.y = Math.sin(t * 2) * 0.005;
-    p.setWings(Math.max(0, Math.sin(t * 0.45) - 0.93) * 4);
+    // raptor head: holds dead still, then snaps to a new bearing
+    p.head.rotation.y = glance(t, 12, 1.5, 0.14) * 0.55;
+    p.head.rotation.x = glance(t, 13, 1.9, 0.14) * 0.08;
+    p.head.rotation.z = glance(t, 14, 2.6, 0.2) * 0.1;
+    p.body.position.y = breath(t, 0.45) * 0.005;
+    // a rousing ruffle of the wings now and then
+    const r = twitch(t, 7.3, 0.7, 3);
+    p.setWings(r * 0.35, Math.sin(t * 22) * 0.06 * r);
   };
   return { model, parts: p, idle };
 }
@@ -599,9 +840,12 @@ function buildCobra() {
   p.tongue.scale.z = 0.01;
 
   const idle = (t) => {
-    p.neck.forEach((seg, i) => (seg.rotation.z = Math.sin(t * 1.4 - i * 0.6) * 0.09));
-    p.tongue.scale.z = Math.sin(t * 2.7) > 0.75 ? 1 : 0.01;
-    p.hood.scale.set(1 + Math.sin(t * 1.1) * 0.05, 1, 1);
+    // hypnotic sway down the neck, the head tracking, quick double tongue-flicks
+    p.neck.forEach((seg, i) => (seg.rotation.z = Math.sin(t * 1.3 - i * 0.6) * 0.085));
+    p.head.rotation.y = glance(t, 15, 2.2, 0.35) * 0.25;
+    const f = fract(t / 2.9);
+    p.tongue.scale.z = (f > 0.05 && f < 0.13) || (f > 0.19 && f < 0.27) ? 1 : 0.01;
+    p.hood.scale.set(1 + breath(t, 0.35) * 0.07, 1, 1);
   };
   return { model, parts: p, idle };
 }
@@ -720,7 +964,7 @@ function buildScorpion() {
     p.tail[4].rotation.x = 0.5 + Math.sin(t * 2.3) * 0.1;
     p.fingerL.rotation.y = 0.15 + Math.max(0, Math.sin(t * 1.5)) * 0.35;
     p.fingerR.rotation.y = -0.15 - Math.max(0, Math.sin(t * 1.5 + 1)) * 0.35;
-    p.legs.forEach((leg, i) => (leg.rotation.x = Math.sin(t * 3 + i) * 0.035));
+    p.legs.forEach((leg, i) => (leg.rotation.x = twitch(t, 2.7, 0.35, i * 0.31) * 0.12 * (i % 2 ? 1 : -1)));
   };
   return { model, parts: p, idle };
 }
@@ -761,8 +1005,8 @@ function buildCrocodile() {
   mirror((s) => {
     for (const z of [0.15, -0.16]) {
       const leg = pivot(b, [s * 0.12, 0.1, z]);
-      bone(leg, plain, [0, 0, 0], [s * 0.08, -0.045, 0.01], 0.034);
-      bone(leg, plain, [s * 0.08, -0.045, 0.01], [s * 0.1, -0.08, 0.04], 0.026);
+      seg(leg, plain, [0, 0, 0], [s * 0.08, -0.045, 0.01], 0.036, 0.026, 0.1);
+      seg(leg, plain, [s * 0.08, -0.045, 0.01], [s * 0.1, -0.08, 0.04], 0.025, 0.02);
       ell(leg, plain, [s * 0.105, -0.088, 0.06], [0.04, 0.012, 0.045]);
       for (let k = -1; k <= 1; k++) cone(leg, mat(0x161a0e), [s * 0.105 + k * 0.016, -0.09, 0.1], [0.005, 0.022, 0.005], [Math.PI / 2, 0, 0], 5);
       p.legs.push(leg);
@@ -781,8 +1025,10 @@ function buildCrocodile() {
 
   const idle = (t) => {
     p.tail.forEach((seg, i) => (seg.rotation.y = 0.32 + Math.sin(t * 1.1 - i * 0.7) * 0.1));
-    p.jaw.rotation.x = Math.max(0, Math.sin(t * 0.5) - 0.6) * 1.0;
-    p.head.rotation.y = Math.sin(t * 0.4) * 0.1;
+    // the jaw gapes and holds, then snaps shut
+    const ph = fract(t / 6.3);
+    p.jaw.rotation.x = ph < 0.3 ? easeIO(Math.min(1, ph / 0.12)) * 0.4 : ph < 0.33 ? 0.4 * (1 - (ph - 0.3) / 0.03) : 0;
+    p.head.rotation.y = glance(t, 16, 3.5, 0.6) * 0.1;
   };
   return { model, parts: p, idle };
 }

@@ -60,6 +60,11 @@ export class TokenView {
   setSelectable(on) {
     this.selectable = on;
     this.ring.visible = on;
+    if (!on) {
+      // don't leave the piece hovering mid-bounce
+      this.model.position.y = this.model.userData.rest.position.y;
+      this.squash(1);
+    }
   }
 
   faceTowards(target) {
@@ -75,8 +80,31 @@ export class TokenView {
       const s = 1 + Math.sin(time * 6) * 0.07 + this.hoverBoost * 0.12;
       this.ring.scale.set(s, s, s);
       this.ring.material.opacity = 0.65 + Math.sin(time * 6) * 0.25;
-      this.model.position.y = 0.07 + Math.abs(Math.sin(time * 5)) * 0.08 * (1 + this.hoverBoost);
+      // eager little bounce, squashing briefly each time it touches down
+      const b = Math.abs(Math.sin(time * 5));
+      this.model.position.y = 0.07 + b * 0.08 * (1 + this.hoverBoost);
+      const contact = Math.max(0, 1 - b / 0.3);
+      this.squash(1 - contact * contact * (this.style === 'kids' ? 0.14 : 0.07));
     }
+  }
+
+  // Volume-preserving squash (sy < 1) / stretch (sy > 1) of the model about its feet.
+  squash(sy) {
+    const r = this.model.userData.rest.scale;
+    const sxz = 1 / Math.sqrt(sy);
+    this.model.scale.set(r.x * sxz, r.y * sy, r.z * sxz);
+  }
+
+  // Pose used while hopping: squash / stretch plus pitch (nose up < 0) and roll (lean into turns).
+  hopPose(sy = 1, pitch = 0, roll = 0) {
+    this.squash(sy);
+    this.model.rotation.set(pitch, 0, roll);
+  }
+
+  clearHopPose() {
+    const r = this.model.userData.rest;
+    this.model.scale.copy(r.scale);
+    this.model.quaternion.copy(r.quaternion);
   }
 
   // Restore every node of the model to its rest transform.

@@ -111,7 +111,7 @@ export function kidTexture(key, { base, layers = [], space = 'sphere', w = 256, 
     const t = new THREE.CanvasTexture(c);
     t.colorSpace = THREE.SRGBColorSpace;
     t.wrapS = THREE.RepeatWrapping;
-    t.anisotropy = 4;
+    // anisotropy: THREE.Texture.DEFAULT_ANISOTROPY, set by World from the GPU's limit
     return t;
   });
 }

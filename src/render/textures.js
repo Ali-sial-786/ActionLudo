@@ -4,8 +4,12 @@ import * as THREE from 'three';
 // Torso textures assume a "spine sphere": a sphere whose poles run along the spine (z axis).
 // On that mapping canvas x runs around the body (x = 0.25W is the belly, 0.75W the back)
 // and canvas y runs along the spine (top = head end).
+//
+// Painting happens in a 256-unit logical space (SIZE) on a canvas RES pixels wide, so every shape is
+// drawn crisply at the higher resolution; fur strokes are finer than one logical unit.
 
 const SIZE = 256;
+const RES = 512;
 const cache = new Map();
 
 function seeded(seed) {
@@ -20,16 +24,28 @@ function seeded(seed) {
 
 function canvas() {
   const c = document.createElement('canvas');
-  c.width = c.height = SIZE;
-  return [c, c.getContext('2d')];
+  c.width = c.height = RES;
+  const g = c.getContext('2d');
+  g.setTransform(RES / SIZE, 0, 0, RES / SIZE, 0, 0);
+  return [c, g];
 }
 
+// Anisotropy comes from THREE.Texture.DEFAULT_ANISOTROPY, which World sets from the GPU's limit.
 function toTexture(c, srgb = true) {
   const t = new THREE.CanvasTexture(c);
   if (srgb) t.colorSpace = THREE.SRGBColorSpace;
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.anisotropy = 4;
   return t;
+}
+
+// A short stroke, repeated across the left / right edge so the texture wraps around a body seamlessly.
+function stroke(g, x, y, dx, dy) {
+  for (const o of x < 12 ? [0, SIZE] : x > SIZE - 12 ? [0, -SIZE] : [0]) {
+    g.beginPath();
+    g.moveTo(x + o, y);
+    g.lineTo(x + o + dx, y + dy);
+    g.stroke();
+  }
 }
 
 const hex = (n) => `#${n.toString(16).padStart(6, '0')}`;
@@ -56,17 +72,15 @@ function paintFur(g, rnd, { base, dark, light, strokes = 2600, len = 7, belly = 
     g.fillStyle = grad;
     g.fillRect(0, 0, SIZE, SIZE);
   }
-  for (let i = 0; i < strokes; i++) {
+  g.lineCap = 'round';
+  for (let i = 0; i < strokes * 2.2; i++) {
     const x = rnd() * SIZE;
     const y = rnd() * SIZE;
     const r = rnd();
     g.strokeStyle = r < 0.5 ? shade(dark, 0.9 + rnd() * 0.3) : shade(light, 0.85 + rnd() * 0.3);
-    g.globalAlpha = 0.18 + rnd() * 0.25;
-    g.lineWidth = 0.8 + rnd() * 1.2;
-    g.beginPath();
-    g.moveTo(x, y);
-    g.lineTo(x + (rnd() - 0.5) * 2, y + len * (0.6 + rnd()));
-    g.stroke();
+    g.globalAlpha = 0.16 + rnd() * 0.22;
+    g.lineWidth = 0.5 + rnd() * 0.8;
+    stroke(g, x, y, (rnd() - 0.5) * 2, len * (0.6 + rnd()));
   }
   g.globalAlpha = 1;
 }
@@ -74,17 +88,15 @@ function paintFur(g, rnd, { base, dark, light, strokes = 2600, len = 7, belly = 
 function paintBumpFur(g, rnd, strokes = 3000, len = 7) {
   g.fillStyle = '#808080';
   g.fillRect(0, 0, SIZE, SIZE);
-  for (let i = 0; i < strokes; i++) {
+  g.lineCap = 'round';
+  for (let i = 0; i < strokes * 2.2; i++) {
     const x = rnd() * SIZE;
     const y = rnd() * SIZE;
     const v = Math.floor(70 + rnd() * 120);
     g.strokeStyle = `rgb(${v},${v},${v})`;
-    g.globalAlpha = 0.5;
-    g.lineWidth = 1 + rnd();
-    g.beginPath();
-    g.moveTo(x, y);
-    g.lineTo(x + (rnd() - 0.5) * 2, y + len * (0.6 + rnd()));
-    g.stroke();
+    g.globalAlpha = 0.45;
+    g.lineWidth = 0.6 + rnd() * 0.8;
+    stroke(g, x, y, (rnd() - 0.5) * 2, len * (0.6 + rnd()));
   }
   g.globalAlpha = 1;
 }
@@ -201,24 +213,30 @@ export function skinMaps(key, { base, dark, light, belly = null, back = null, wr
     }
     bg.fillStyle = '#808080';
     bg.fillRect(0, 0, SIZE, SIZE);
-    for (let i = 0; i < 1800; i++) {
+    // fine pores / flecks: small round dots, denser than one per logical pixel block
+    const dot = (ctx, x, y, r) => {
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+    };
+    for (let i = 0; i < 4200; i++) {
       const x = rnd() * SIZE;
       const y = rnd() * SIZE;
       g.fillStyle = rnd() < 0.5 ? hex(dark) : hex(light);
       g.globalAlpha = 0.08 + rnd() * 0.1;
-      g.fillRect(x, y, 1 + rnd() * 2, 1 + rnd() * 2);
+      dot(g, x, y, 0.4 + rnd() * 0.8);
       const v = Math.floor(90 + rnd() * 80);
       bg.fillStyle = `rgb(${v},${v},${v})`;
-      bg.fillRect(x, y, 2, 2);
+      dot(bg, x, y, 0.6 + rnd() * 0.5);
     }
     for (let i = 0; i < wrinkles; i++) {
       const x = rnd() * SIZE;
       const y = rnd() * SIZE;
       g.strokeStyle = hex(dark);
       g.globalAlpha = 0.2;
-      g.lineWidth = 1;
+      g.lineWidth = 0.8;
       bg.strokeStyle = '#3a3a3a';
-      bg.lineWidth = 1.5;
+      bg.lineWidth = 1.2;
       const ang = rnd() * Math.PI;
       const l = 8 + rnd() * 20;
       for (const ctx of [g, bg]) {
