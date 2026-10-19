@@ -63,7 +63,7 @@ const THEMES = {
     rimColor: 0x8fb4ff,
     rim: 0.7,
     env: 0.18,
-    shadowRadius: 1,
+    shadowRadius: 0.7,
     shadowIntensity: 1,
     flashTint: new THREE.Color(0.55, 0.0, 0.02),
   },
@@ -101,6 +101,11 @@ export class World {
     renderer.localClippingEnabled = true;
     container.appendChild(renderer.domElement);
     this.renderer = renderer;
+    // Procedural textures are seen at grazing angles from the low board camera: filter them
+    // anisotropically (applies to every texture created from here on that doesn't set its own).
+    THREE.Texture.DEFAULT_ANISOTROPY = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+    // Desktop-class GPUs get a 4096 sun shadow map for crisp contact shadows under the pieces.
+    this.shadowSize = hiDetail(renderer) ? 4096 : 2048;
 
     const scene = new THREE.Scene();
     this.skyTexture = makeSkyTexture();
@@ -170,23 +175,29 @@ export class World {
     const sun = new THREE.DirectionalLight(0xfff1dc, 2.6);
     sun.position.set(-9, 22, 12);
     sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.mapSize.set(this.shadowSize, this.shadowSize);
     const s = sun.shadow.camera;
-    // wide enough for the dice trays out on the table
-    s.left = -15;
-    s.right = 15;
-    s.top = 15;
-    s.bottom = -15;
-    s.near = 1;
-    s.far = 60;
-    sun.shadow.bias = -0.0004;
-    sun.shadow.normalBias = 0.02;
+    // Fitted (in light space) around the board and the dice trays out on the table at
+    // x = ±11..12.8, z = ±2.3..6.7, from just under the table top up to ~2 units above it.
+    s.left = -15.2;
+    s.right = 15.2;
+    s.top = 13.4;
+    s.bottom = -12.4;
+    s.near = 8;
+    s.far = 40;
+    // Small texels and a tight depth range let the bias stay small: contact shadows stay
+    // attached to the paws without acne on the fur.
+    const fine = this.shadowSize / 2048;
+    sun.shadow.bias = -0.0005 / fine;
+    sun.shadow.normalBias = 0.022 / fine;
     this.scene.add(sun);
     this.sun = sun;
 
+    // Rim light: kept behind the subject relative to the camera (see updateRim) so silhouettes
+    // separate from the board in every shot, the kill-cam included.
     const rim = new THREE.DirectionalLight(0x8fb4ff, 0.7);
     rim.position.set(10, 8, -14);
-    this.scene.add(rim);
+    this.scene.add(rim, rim.target);
     this.hemi = hemi;
     this.rim = rim;
 
@@ -262,7 +273,8 @@ export class World {
     this.hemi.groundColor.setHex(look.hemiGround);
     this.sun.color.setHex(look.sunColor);
     this.rim.color.setHex(look.rimColor);
-    this.sun.shadow.radius = look.shadowRadius;
+    // PCF radius is in shadow-map texels: scale it so the softness is the same at any map size.
+    this.sun.shadow.radius = look.shadowRadius * (this.shadowSize / 2048);
     this.sun.shadow.intensity = look.shadowIntensity;
     this.grade.uniforms.flashTint.value.copy(look.flashTint);
     this.computeHomeView();
@@ -270,7 +282,15 @@ export class World {
   }
 
   setupPost() {
-    const composer = new EffectComposer(this.renderer);
+    // Multisampled HDR target: the kill-cam close-ups go through the composer, and without MSAA
+    // their silhouettes would be jagged exactly where it matters most. (Resized in onResize.)
+    const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
+    const target = new THREE.WebGLRenderTarget(Math.max(1, size.x), Math.max(1, size.y), {
+      type: THREE.HalfFloatType,
+      samples: Math.min(4, this.renderer.capabilities.maxSamples),
+    });
+    target.texture.name = 'EffectComposer.rt1';
+    const composer = new EffectComposer(this.renderer, target);
     composer.addPass(new RenderPass(this.scene, this.camera));
     this.bokeh = new BokehPass(this.scene, this.camera, { focus: 4, aperture: 0.0, maxblur: 0.009 });
     composer.addPass(this.bokeh);
@@ -505,6 +525,7 @@ export class World {
       this.shakeOffset.z += Math.cos(t * 1.1) * d;
     }
     this.camera.position.add(this.shakeOffset);
+    this.updateRim();
     if (this.post.amount > 0.01 || this.joy.amount > 0.01) {
       this.bokeh.enabled = this.post.amount > 0.01;
       this.bokeh.uniforms.focus.value = this.camera.position.distanceTo(this.controls.target);
@@ -512,6 +533,17 @@ export class World {
     } else {
       this.renderer.render(this.scene, this.camera);
     }
+  }
+
+  // Keep the rim light behind whatever the camera looks at (swung a little to one side and raised),
+  // so every shot gets a thin bright edge on the far side of the pieces.
+  updateRim() {
+    const t = this.controls.target;
+    const f = _rimDir.set(t.x - this.camera.position.x, 0, t.z - this.camera.position.z);
+    if (f.lengthSq() < 1e-6) f.set(0, 0, -1);
+    f.normalize().applyAxisAngle(_yAxis, 0.6);
+    this.rim.position.set(t.x + f.x * 10, t.y + 6.5, t.z + f.z * 10);
+    this.rim.target.position.copy(t);
   }
 
   updateLook(rdt) {
@@ -549,6 +581,15 @@ export class World {
       this.battleRed.intensity = 5 * k;
     }
   }
+}
+
+const _rimDir = new THREE.Vector3();
+const _yAxis = new THREE.Vector3(0, 1, 0);
+
+// Whether this looks like a desktop-class GPU (fine pointer, large textures): worth a 4096 shadow map.
+function hiDetail(renderer) {
+  const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+  return !coarse && renderer.capabilities.maxTextureSize >= 8192;
 }
 
 function makeSkyTexture() {
