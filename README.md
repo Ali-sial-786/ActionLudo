@@ -2,7 +2,7 @@
 
 Classic Ludo in 3D — except every capture is a brutal, cinematic kill.
 
-Each player picks a **colour** and an **animal**. Pieces move by normal Ludo rules with a fair die, but when you land on an opponent the game cuts to a kill-cam: the lights drop, letterbox bars slide in, and your animal hunts its prey in slow-motion close-ups. Blood sprays and stains the board, wounds open, heads and limbs are torn off and bodies are ripped in half. The mangled carcass is then chained and dragged back to its cage, leaving a smeared blood trail, and the cage slams shut. Roll a **6** and a golden key unlocks a cage so the animal can leap back onto the board.
+Each player picks a **colour** and an **animal**. Pieces move by normal Ludo rules with a fair die, but when you land on an opponent the two first fight it out in a quick button-mashing clash. If the attacker wins, the game cuts to a kill-cam: the lights drop, letterbox bars slide in, and your animal hunts its prey in slow-motion close-ups. Blood spatters the board, wounds open, heads and limbs are torn off and bodies are ripped in half. The mangled carcass is then chained and dragged back to its cage, leaving a smeared blood trail, and the cage slams shut. Roll a **6** and a golden key unlocks a cage so the animal can leap back onto the board.
 
 > Contains graphic animal violence. Untick **Blood & gore** on the main menu for a bloodless version, or switch to **🧸 Kids** mode for a completely different, family-friendly game.
 
@@ -64,12 +64,17 @@ The attacker decides the kill; the victim's own anatomy is what gets torn off (a
 - Each player has 4 animals, all starting locked in cages.
 - A **6** releases an animal onto its start square (key-and-cage animation).
 - Move clockwise around the 52-square track, then up your coloured home column. You need the exact roll to reach the centre.
-- Landing on an opponent on a normal square captures it (battle → chains → cage).
+- Landing on a lone opponent on a normal square starts a **clash** (see below). Win it and the kill-cam plays: your animal kills its prey, which is chained and dragged back to its cage. Lose it and the defender survives: the two animals share the square.
+- Two animals sharing a square (of any colours) can't be attacked: a third that lands there just joins them.
 - ⭐ Star squares and coloured start squares are **safe**; animals can share them.
 - A 6, a capture, or getting an animal home earns another roll. Three 6s in a row forfeit the turn.
 - First to get all four animals home wins; play continues until the final standings are decided.
 
 The die uses `crypto.getRandomValues` with rejection sampling, so every face has exactly a 1/6 chance.
+
+### The clash
+
+Before any kill, attacker and defender fight it out in a quick mashing tug-of-war (**CLASH!**, or **BONK-OFF!** in Kids mode). Every tap pushes the clash point toward your opponent and your animal shoves forward on the board. Fill the bar with your colour, or be ahead when the 5 seconds run out (a dead heat is a coin toss). CPU players mash too; Kids-mode CPUs go a bit easier. Two CPUs settle it in a quick 2.4-second clash.
 
 ### Throwing the die
 
@@ -81,6 +86,7 @@ The throw is for fun only: the number is drawn fairly the moment the die leaves 
 
 - **Roll:** press anywhere on the board to pick up the die, drag to shake it and flick to throw it. Or hold <kbd>Space</kbd> (or the **Roll** button) to shake and let go to throw; a quick tap tosses it straight away.
 - **Move:** click a glowing animal (hover shows where it will land).
+- **Clash:** mash any key or tap anywhere. Two players on one device: the attacker mashes A S D F (or taps the left half of the screen) and the defender mashes J K L (or the right half).
 - **Camera:** drag to orbit, scroll or pinch to zoom, 🎥 resets the view.
 - **1× / 2× / 3×** changes animation speed; during a kill, **⏩ Fast-forward** (or <kbd>Space</kbd>) speeds through it and skips the slow motion. 🔊 toggles sound.
 
@@ -113,7 +119,8 @@ src/
   game/board.js       board geometry: track, home columns, safe squares
   game/rules.js       pure Ludo rules (legal moves, captures, turns, three-sixes)
   game/ai.js          CPU move scoring
-  game/controller.js  turn loop, input, movement, battle → chain → cage sequences
+  game/controller.js  turn loop, input, movement, clash → battle → chain → cage sequences
+  game/duel.js        the clash mini-game: tug-of-war state, CPU mashing, input, the shoving animals
   render/animals.js   the 10 procedural animals with named, animatable parts
   render/textures.js  procedural fur / stripe / scale / skin / feather textures
   render/battles.js   one kill choreography (with camera shots) per animal
@@ -132,6 +139,7 @@ src/
   render/kidEffects.js  Kids-mode particle effects
   engine/kidSounds.js   Kids-mode sound effects (yay, tada, boing, bubble, squeak, giggle, poof)
   ui/hud.js           setup screen, mode switch, arena, HUD, banners
+  ui/duelUI.js        the clash overlay: bar, mash pads, countdown, timer, result
 tests/rules.test.js   node:test suite for the rules and AI
 tests/dice.test.js    dice physics: throws settle in the tray and always show the rolled number
 ```

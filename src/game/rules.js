@@ -59,10 +59,13 @@ export function tokensOnTrackIndex(game, index) {
   return game.tokens.filter((t) => trackIndexOf(t.seat, t.progress) === index);
 }
 
+// A piece can only be attacked on a normal square it holds alone: two pieces sharing a square
+// (of any colours) are left in peace, and so is anyone on a safe square.
 function capturesAt(game, seat, progress) {
   const index = trackIndexOf(seat, progress);
   if (index === null || isSafeTrackIndex(index)) return [];
-  return tokensOnTrackIndex(game, index).filter((t) => t.seat !== seat);
+  const here = tokensOnTrackIndex(game, index);
+  return here.length === 1 && here[0].seat !== seat ? here : [];
 }
 
 export function legalMoves(game, seat, roll) {
@@ -111,11 +114,12 @@ export function registerRoll(game, roll) {
   return { forfeit: false };
 }
 
+// Moves the piece. Landing on a lone opponent doesn't capture it outright: it starts a duel
+// (result.duel), and resolveDuel() then either sends the victim home or lets it stay, sharing
+// the square with the attacker.
 export function applyMove(game, move, roll) {
   const { token } = move;
-  const captured = move.captures.map((victim) => ({ token: victim, from: victim.progress }));
   token.progress = move.to;
-  for (const { token: victim } of captured) victim.progress = -1;
 
   const player = game.players.find((p) => p.seat === token.seat);
   const finishedToken = move.to === FINISH_PROGRESS;
@@ -134,8 +138,24 @@ export function applyMove(game, move, roll) {
     }
   }
 
-  const bonus = !playerFinished && !game.over && (roll === 6 || captured.length > 0 || finishedToken);
-  return { captured, finishedToken, playerFinished, bonus };
+  const bonus = !playerFinished && !game.over && (roll === 6 || finishedToken);
+  return { duel: move.captures[0] ?? null, captured: [], spared: null, finishedToken, playerFinished, bonus };
+}
+
+// Settles the duel started by a move. A winning attacker captures the victim and earns a bonus
+// roll; if the defender wins, both pieces stay put on the square.
+export function resolveDuel(game, result, attackerWins) {
+  const victim = result.duel;
+  if (!victim) return result;
+  result.duel = null;
+  if (attackerWins) {
+    result.captured.push({ token: victim, from: victim.progress });
+    victim.progress = -1;
+    if (!result.playerFinished && !game.over) result.bonus = true;
+  } else {
+    result.spared = victim;
+  }
+  return result;
 }
 
 export function advanceTurn(game) {

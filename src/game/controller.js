@@ -10,8 +10,11 @@ import {
   fairRoll,
   legalMoves,
   registerRoll,
+  resolveDuel,
 } from './rules.js';
 import { chooseMove } from './ai.js';
+import { Duel } from './duel.js';
+import { DuelUI } from '../ui/duelUI.js';
 import { TokenView } from '../render/token.js';
 import { Cage, unlockWithKey } from '../render/cage.js';
 import { BOARD_Y, finishSpot, squareWorld, yardCenter, yardSpot } from '../render/boardMesh.js';
@@ -57,6 +60,7 @@ const COPY = {
     pick: (roll, animal) => `Rolled a ${roll}. Pick a glowing ${animal} to move.`,
     finished: (who, place) => `${who} finishes ${place}!`,
     bonus: (why) => `${why === 'capture' ? 'Capture bonus' : why === 'home' ? 'Made it home' : 'Rolled a 6'} — roll again!`,
+    spared: (who) => `${who} survives — the two share the square.`,
   },
   kids: {
     rolling: (who) => `${who} is rolling…`,
@@ -68,6 +72,7 @@ const COPY = {
     pick: (roll, animal) => `You rolled a ${roll}! Tap a bouncing ${animal} to hop.`,
     finished: (who, place) => `${who} got everyone home — ${place} place! 🎉`,
     bonus: (why) => (why === 'capture' ? 'Bonus roll for the bonk — go again! 🎲' : why === 'home' ? 'Home sweet home — roll again! 🏡' : 'A six! Roll again! 🎲'),
+    spared: (who) => `${who} wiggled free — now they share the square! 🤝`,
   },
 };
 const copy = () => (isKids() ? COPY.kids : COPY.action);
@@ -89,6 +94,8 @@ export class GameController {
     this.session = 0;
     this.pending = null;
     this.hovered = null;
+    this.duelUI = new DuelUI();
+    this.activeDuel = null;
     this.raycaster = new THREE.Raycaster();
     this.pointer = new THREE.Vector2();
     this.setupInput();
@@ -362,6 +369,9 @@ export class GameController {
     this.diceCamReturn = null;
     this.rollPointer = null;
     this.dice.drop();
+    this.activeDuel?.cancel();
+    this.activeDuel = null;
+    this.duelUI.close();
     this.world.slow.hold = 0;
     this.anim.slow = 1;
     this.world.setCinematicLook(false);
@@ -504,7 +514,8 @@ export class GameController {
   }
 
   // ---------------------------------------------------------------- move animations
-  async animateMove(move, result) {
+  // `duel: false` skips the clash mini-game (the arena showcase always ends in a kill).
+  async animateMove(move, result, { duel = true } = {}) {
     const view = this.views.get(move.token.id);
     view.busy = true;
     view.clearWounds(); // last kill's blood washes off when it moves on
@@ -515,14 +526,10 @@ export class GameController {
       for (let p = move.from + 1; p <= move.to; p++) {
         path.push(p === FINISH_PROGRESS ? finishSpot(move.token.seat, move.token.index) : this.squarePos(move.token.seat, p));
       }
-      if (result.captured.length) {
-        const back = path.length >= 2 ? path[path.length - 2] : view.root.position.clone();
+      if (result.duel) {
         await this.hopAlong(view, path.slice(0, -1));
         const V = path[path.length - 1];
-        for (const [i, { token }] of result.captured.entries()) {
-          if (i > 0) await this.hopAlong(view, [back]);
-          await this.battle(view, this.views.get(token.id), V);
-        }
+        await this.battle(view, this.views.get(result.duel.id), V, (won) => resolveDuel(this.game, result, won), { duel });
       } else {
         await this.hopAlong(view, path);
       }
@@ -681,7 +688,8 @@ export class GameController {
   }
 
   // Full capture sequence: cinematic kill, the carcass is pulled together and dragged home in chains.
-  async battle(atk, vic, V) {
+  // `decide(attackerWins)` is called once the clash is settled (before any kill is shown).
+  async battle(atk, vic, V, decide = () => {}, { duel = true } = {}) {
     const A = atk.root.position.clone().setY(BOARD_Y);
     const camSaved = this.saveCamera();
     vic.busy = true;
@@ -705,7 +713,7 @@ export class GameController {
     D.begin(A, V, Math.max(BULK[atk.animal] ?? 1, BULK[vic.animal] ?? 1), kids ? 'kids' : 'action');
     const atkPlayer = atk.player;
     const vicPlayer = vic.player;
-    this.hud.battleBanner(atkPlayer, vicPlayer);
+    if (!duel) this.hud.battleBanner(atkPlayer, vicPlayer);
     if (!kids) this.sfx.play('heartbeat');
     await Promise.all([
       D.move({ at: D.at('mid'), yaw: 12, pitch: 20, dist: 3.2, lift: 0.3, fov: 38 }, 0.8),
@@ -717,6 +725,14 @@ export class GameController {
         vic.root.rotation.y = lerpAngle(vr0, faceV, k);
       }),
     ]);
+    const session = this.session;
+    const attackerWins = duel ? await this.clash(atk, vic, A, V, kids) : true;
+    if (!this.alive(session)) return;
+    decide(attackerWins);
+    if (!attackerWins) {
+      await this.repel(atk, vic, A, V, camSaved);
+      return;
+    }
     let titled = false;
     const ctx = makeContext({
       world: this.world,
@@ -794,6 +810,77 @@ export class GameController {
     D.end();
     vic.busy = false;
     vic.idle = true;
+    this.world.cinematic = false;
+  }
+
+  // The clash mini-game before a kill. Resolves true if the attacker wins, with both animals back
+  // on their marks for the kill.
+  async clash(atk, vic, A, V, kids) {
+    const side = (view) => ({ view, player: view.player, color: COLORS[view.token.seat], animal: animalById(view.animal) });
+    const duel = (this.activeDuel = new Duel({ world: this.world, sfx: this.sfx, fx: this.fx, ui: this.duelUI, a: side(atk), b: side(vic), A, V, kids }));
+    const attackerWins = await duel.run();
+    this.activeDuel = null;
+    this.duelUI.result(attackerWins);
+    this.sfx.play(kids ? 'yay' : attackerWins ? 'roar' : 'thud', { power: 0.8 });
+    await this.anim.wait(1.0);
+    this.duelUI.fadeOut();
+    if (attackerWins) {
+      const a0 = atk.root.position.clone();
+      const v0 = vic.root.position.clone();
+      await this.anim.tween(0.25, (k) => {
+        atk.root.position.lerpVectors(a0, A, k);
+        vic.root.position.lerpVectors(v0, V, k);
+      }, Ease.inOutCubic);
+      atk.resetPose();
+      vic.resetPose();
+    }
+    return attackerWins;
+  }
+
+  // The defender won the clash: it throws the attacker back, then the attacker steps in and the
+  // two share the square.
+  async repel(atk, vic, A, V, camSaved) {
+    const kids = isKids();
+    const dir = V.clone().sub(A).setY(0).normalize();
+    const a0 = atk.root.position.clone();
+    const v0 = vic.root.position.clone();
+    const back = A.clone().addScaledVector(dir, -0.15).setY(BOARD_Y);
+    const lunge = v0.clone().addScaledVector(dir, -0.18);
+    this.sfx.play(kids ? 'boing' : 'thud', { power: 0.8 });
+    this.fx.sparks(a0.clone().lerp(v0, 0.5).setY(BOARD_Y + 0.35), kids ? 0xffe066 : 0xfff0d0, 14, 3);
+    this.fx.dust(a0.clone().setY(BOARD_Y + 0.03), 8);
+    this.world.shake(0.12);
+    const r0 = atk.root.rotation.y;
+    const spin = (Math.random() < 0.5 ? -1 : 1) * 0.7;
+    await this.anim.tween(0.55, (k) => {
+      const out = Math.sin(Math.min(1, k * 2) * Math.PI);
+      vic.root.position.lerpVectors(v0, lunge, out);
+      vic.model.rotation.x = 0.35 * out;
+      atk.root.position.lerpVectors(a0, back, Ease.outCubic(k));
+      atk.root.position.y = BOARD_Y + arc(k, 0.3);
+      atk.root.rotation.y = r0 + spin * Math.sin(k * Math.PI);
+      atk.model.rotation.x = -0.5 * Math.sin(k * Math.PI);
+    });
+    atk.resetPose();
+    vic.resetPose();
+    this.hud.toast(copy().spared(`${animalById(vic.animal).emoji} ${vic.player.name}`), 2400);
+    await this.anim.wait(0.35);
+    // the attacker steps in beside its rival
+    const a1 = atk.root.position.clone();
+    const r1 = atk.root.rotation.y;
+    const r2 = Math.atan2(V.x - a1.x, V.z - a1.z);
+    this.sfx.play('hop', { step: 2 });
+    await this.anim.tween(0.32, (k) => {
+      atk.root.position.lerpVectors(a1, V, k);
+      atk.root.position.y = BOARD_Y + arc(k, 0.28);
+      atk.root.rotation.y = lerpAngle(r1, r2, Math.min(1, k * 2));
+    });
+    this.sfx.play('land');
+    atk.idle = true;
+    vic.idle = true;
+    vic.busy = false;
+    this.director.end();
+    await this.restoreCamera(camSaved, 0.7);
     this.world.cinematic = false;
   }
 
@@ -929,7 +1016,7 @@ export class GameController {
   }
 
   // ---------------------------------------------------------------- arena (watch any matchup)
-  async arena({ attacker, victim, attackerSeat = 0, victimSeat = 3 }) {
+  async arena({ attacker, victim, attackerSeat = 0, victimSeat = 3, duel = false }) {
     this.abort();
     const session = this.session;
     const players = [
@@ -953,7 +1040,7 @@ export class GameController {
     if (!this.alive(session)) return;
     const move = legalMoves(this.game, attackerSeat, 2).find((m) => m.token === atkToken);
     const result = applyMove(this.game, move, 2);
-    await this.animateMove(move, result);
+    await this.animateMove(move, result, { duel });
     if (!this.alive(session)) return;
     return true;
   }

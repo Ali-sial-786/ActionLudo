@@ -92,10 +92,10 @@ export class Director {
     else this.world.slowmo(factor, hold);
   }
 
-  // Action: a hard red flash and a jolt. Kids: a soft sunny pop and a little wobble.
+  // Action: a red flash (kept fairly soft) and a jolt. Kids: a soft sunny pop and a little wobble.
   impact(power = 1) {
     const kids = this.look === 'kids';
-    this.world.flash((kids ? 0.35 : 0.6) * power);
+    this.world.flash((kids ? 0.35 : 0.4) * power);
     this.world.shake((kids ? 0.07 : 0.12) * power);
   }
 }

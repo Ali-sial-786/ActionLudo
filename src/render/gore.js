@@ -5,7 +5,9 @@ import { getGlowTexture } from './effects.js';
 
 // Blood, wounds and dismemberment.
 
-export const goreSettings = { enabled: true };
+// `blood` scales how much blood is spilled: droplets, mist, meat, stains and wounds (1 = full-on).
+export const goreSettings = { enabled: true, blood: 0.35 };
+const blood = () => goreSettings.blood;
 
 const MAX_DROPS = 1200;
 const MAX_DECALS = 220;
@@ -219,7 +221,8 @@ export class Gore {
     if (!this.on) return;
     this.ensureDropMesh();
     const d = dir ? dir.clone().normalize() : null;
-    for (let i = 0; i < count && this.drops.length < MAX_DROPS; i++) {
+    const n = Math.round(count * blood());
+    for (let i = 0; i < n && this.drops.length < MAX_DROPS; i++) {
       const v = new THREE.Vector3(rand(-1, 1), rand(-1, 1), rand(-1, 1)).normalize();
       if (d) v.multiplyScalar(spread).add(d).normalize();
       v.multiplyScalar(speed * rand(0.45, 1.15));
@@ -232,26 +235,27 @@ export class Gore {
   burst(origin, power = 1) {
     if (!this.on) return;
     this.spray(origin, null, { count: Math.round(170 * power), speed: 3.4 * power, spread: 1, up: 1.4, size: [0.005, 0.016], splat: 0.35 });
-    this.mist(origin, 1.2 * power);
+    this.mist(origin, 1.2 * power * (0.6 + 0.4 * blood()));
     this.meat(origin, Math.round(10 * power), 2.6 * power);
   }
 
   mist(origin, size = 1) {
     if (!this.on) return;
-    for (let i = 0; i < 4; i++) {
-      const mat = new THREE.SpriteMaterial({ map: getGlowTexture(), color: pick([0x5a0006, 0x7a0a10, 0x3a0003]), transparent: true, opacity: 0.55, depthWrite: false });
+    const opacity = 0.55 * (0.4 + 0.6 * blood());
+    for (let i = 0; i < Math.max(1, Math.round(4 * blood())); i++) {
+      const mat = new THREE.SpriteMaterial({ map: getGlowTexture(), color: pick([0x5a0006, 0x7a0a10, 0x3a0003]), transparent: true, opacity, depthWrite: false });
       const s = new THREE.Sprite(mat);
       s.position.copy(origin).add(new THREE.Vector3(rand(-0.1, 0.1), rand(-0.05, 0.15), rand(-0.1, 0.1)));
       s.scale.setScalar(0.2 * size);
       this.layer.add(s);
-      this.mists.push({ s, mat, t: 0, dur: rand(0.6, 1.1), to: size * rand(0.7, 1.2), rise: rand(0.05, 0.2) });
+      this.mists.push({ s, mat, opacity, t: 0, dur: rand(0.6, 1.1), to: size * rand(0.7, 1.2), rise: rand(0.05, 0.2) });
     }
   }
 
   // Flesh chunks and bone splinters.
   meat(origin, count = 10, speed = 2.5) {
     if (!this.on) return;
-    for (let i = 0; i < count; i++) {
+    for (let i = 0; i < Math.round(count * blood()); i++) {
       const bone = Math.random() < 0.25;
       const geo = bone ? new THREE.CylinderGeometry(0.006, 0.01, 1, 5) : new THREE.IcosahedronGeometry(1, 0);
       const mat = new THREE.MeshStandardMaterial({
@@ -275,6 +279,9 @@ export class Gore {
     if (!this.on) return null;
     const mats = getDecalMats()[kind];
     const mat = pick(mats).clone();
+    // less blood: smaller, fainter stains
+    size *= 0.6 + 0.4 * blood();
+    mat.opacity = 0.55 + 0.45 * blood();
     const m = new THREE.Mesh(decalGeo, mat);
     const y = floorAt(pos.x, pos.z) + 0.002 + this.decals.length * 0.00002;
     m.position.set(pos.x, y, pos.z);
@@ -283,7 +290,7 @@ export class Gore {
     m.receiveShadow = true;
     m.renderOrder = 1;
     this.layer.add(m);
-    const d = { m, mat, life, maxLife: life, grow, size, stretch, t: 0 };
+    const d = { m, mat, alpha: mat.opacity, life, maxLife: life, grow, size, stretch, t: 0 };
     if (grow) m.scale.set(0.01, 1, 0.01);
     this.decals.push(d);
     if (this.decals.length > MAX_DECALS) {
@@ -328,6 +335,7 @@ export class Gore {
   // A raw, glistening wound (or claw gashes when gash > 0) on the mesh nearest to `point`.
   wound(view, point, { size = 0.05, gash = 0, angle = rand(-0.6, 0.6) } = {}) {
     if (!this.on) return null;
+    size *= 0.75 + 0.25 * blood();
     const host = this.nearestMesh(view, point);
     if (!host) return null;
     const local = host.worldToLocal(point.clone());
@@ -584,7 +592,7 @@ export class Gore {
       }
       m.s.scale.setScalar(0.2 + (m.to - 0.2) * Ease.outCubic(k));
       m.s.position.y += m.rise * dt;
-      m.mat.opacity = 0.55 * (1 - k);
+      m.mat.opacity = m.opacity * (1 - k);
       return true;
     });
     // stains: grow, then fade near the end of their life
@@ -596,7 +604,7 @@ export class Gore {
         const s = d.size * Ease.outCubic(k);
         d.m.scale.set(Math.max(0.01, s * d.stretch), 1, Math.max(0.01, s));
       }
-      if (d.life < 4) d.mat.opacity = Math.max(0, d.life / 4);
+      if (d.life < 4) d.mat.opacity = d.alpha * Math.max(0, d.life / 4);
       if (d.life <= 0) {
         d.m.removeFromParent();
         d.mat.dispose();

@@ -139,6 +139,17 @@ const SOUNDS = {
     s.tone({ type: 'sine', freq: 300 + Math.random() * 60, to: 170, dur: 0.09, vol: 0.32 * power });
     s.noise({ dur: 0.05, vol: 0.22 * power, filter: 'bandpass', freq: 900 + Math.random() * 300, q: 3 });
   },
+  // one shove in the clash mini-game; each side has its own pitch
+  clash: (s, { side = 1, power = 1 } = {}) => {
+    const f = side > 0 ? 150 : 115;
+    s.tone({ type: 'sine', freq: f * (0.95 + Math.random() * 0.1), to: f * 0.45, dur: 0.12, vol: 0.32 * power });
+    s.noise({ dur: 0.05, vol: 0.18 * power, filter: 'bandpass', freq: side > 0 ? 1500 : 1100, q: 1.5 });
+  },
+  clashGo: (s) => {
+    s.tone({ type: 'sawtooth', freq: 220, to: 440, dur: 0.18, vol: 0.12 });
+    s.noise({ dur: 0.35, vol: 0.3, filter: 'bandpass', freq: 600, to: 2600, q: 1.2 });
+    s.tone({ type: 'sine', freq: 80, to: 40, dur: 0.4, vol: 0.5, dist: 3 });
+  },
   diceSettle: (s, { value = 1 } = {}) => s.tone({ type: 'triangle', freq: 520 + value * 40, to: 640 + value * 50, dur: 0.12, vol: 0.12 }),
   diceSix: (s) => {
     [784, 988, 1175, 1568].forEach((f, i) => s.tone({ type: 'triangle', freq: f, dur: 0.16, vol: 0.16, delay: i * 0.06 }));

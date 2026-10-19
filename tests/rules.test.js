@@ -17,6 +17,7 @@ import {
   fairRoll,
   legalMoves,
   registerRoll,
+  resolveDuel,
 } from '../src/game/rules.js';
 import { chooseMove } from '../src/game/ai.js';
 
@@ -67,18 +68,59 @@ test('only a six releases a token from the yard', () => {
   assert.equal(distinctMoves(moves).length, 1);
 });
 
-test('landing on an opponent on a normal square captures it and grants a bonus', () => {
+// Places a lone red piece two squares behind a lone green piece on normal track squares.
+function standoff() {
   const g = fourPlayers();
   tok(g, 0, 0).progress = 3; // track index 3
-  tok(g, 1, 0).progress = (3 - START_INDEX[1] + TRACK_LENGTH) % TRACK_LENGTH + 2; // index 5
+  tok(g, 1, 0).progress = (5 - START_INDEX[1] + TRACK_LENGTH) % TRACK_LENGTH; // index 5
   const victim = tok(g, 1, 0);
   assert.equal(trackIndexOf(1, victim.progress), 5);
   const [move] = legalMoves(g, 0, 2).filter((m) => m.token === tok(g, 0, 0));
+  return { g, move, victim };
+}
+
+test('landing on a lone opponent starts a duel; winning it captures and grants a bonus', () => {
+  const { g, move, victim } = standoff();
+  const from = victim.progress;
   assert.equal(move.captures.length, 1);
   const res = applyMove(g, move, 2);
+  assert.equal(res.duel, victim);
+  assert.equal(victim.progress, from, 'nothing is captured until the duel is decided');
+  assert.equal(res.bonus, false);
+  resolveDuel(g, res, true);
   assert.equal(victim.progress, -1);
   assert.equal(res.captured.length, 1);
+  assert.equal(res.captured[0].from, from);
   assert.equal(res.bonus, true);
+});
+
+test('a defender who wins the duel survives and shares the square', () => {
+  const { g, move, victim } = standoff();
+  const from = victim.progress;
+  const res = resolveDuel(g, applyMove(g, move, 2), false);
+  assert.equal(victim.progress, from);
+  assert.equal(res.spared, victim);
+  assert.equal(res.captured.length, 0);
+  assert.equal(res.bonus, false);
+  assert.equal(trackIndexOf(0, tok(g, 0, 0).progress), trackIndexOf(1, victim.progress));
+});
+
+test('two pieces sharing a square can not be attacked', () => {
+  // a defended pair (attacker and defender after a lost duel)
+  const { g, move } = standoff();
+  resolveDuel(g, applyMove(g, move, 2), false);
+  tok(g, 2, 0).progress = (1 - START_INDEX[2] + TRACK_LENGTH) % TRACK_LENGTH; // index 1
+  const [third] = legalMoves(g, 2, 4).filter((m) => m.token === tok(g, 2, 0));
+  assert.equal(trackIndexOf(2, third.to), 5);
+  assert.equal(third.captures.length, 0);
+  assert.equal(applyMove(g, third, 4).duel, null);
+  // two pieces of the same colour are just as safe
+  const h = fourPlayers();
+  for (const i of [0, 1]) tok(h, 1, i).progress = (20 - START_INDEX[1] + TRACK_LENGTH) % TRACK_LENGTH;
+  tok(h, 0, 0).progress = 18;
+  const [hit] = legalMoves(h, 0, 2).filter((m) => m.token === tok(h, 0, 0));
+  assert.equal(trackIndexOf(0, hit.to), 20);
+  assert.equal(hit.captures.length, 0);
 });
 
 test('safe squares protect tokens', () => {
@@ -156,6 +198,7 @@ test('a full random cpu game always terminates with complete standings', () => {
         continue;
       }
       const res = applyMove(g, chooseMove(g, moves), roll);
+      resolveDuel(g, res, Math.random() < 0.5);
       if (!res.bonus) advanceTurn(g);
     }
     assert.ok(g.over, 'game did not finish');

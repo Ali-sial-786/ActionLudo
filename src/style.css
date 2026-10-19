@@ -1780,3 +1780,366 @@ body.kids .standings li:first-child {
     animation: none;
   }
 }
+
+/* ---------------------------------------------------------------- clash mini-game (before a kill) */
+.duel {
+  position: fixed;
+  inset: 0;
+  z-index: 16;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+  font-family: var(--condensed);
+  animation: fadeIn 0.25s ease-out both;
+}
+
+.duel.out {
+  animation: fadeOut 0.3s forwards;
+  pointer-events: none;
+}
+
+.duel-head {
+  margin-top: calc(11vh + 6px);
+  text-align: center;
+  pointer-events: none;
+}
+
+.duel-title {
+  font-family: var(--comic);
+  font-size: clamp(40px, 7vw, 76px);
+  letter-spacing: 6px;
+  line-height: 1;
+  color: #f4ece0;
+  text-shadow: 0 3px 0 #000, 0 0 26px rgba(179, 18, 30, 0.85);
+  animation: slam 0.35s cubic-bezier(0.2, 1, 0.3, 1) both;
+}
+
+.duel-sub {
+  margin-top: 6px;
+  font-weight: 700;
+  font-size: clamp(14px, 2.2vw, 19px);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: #fff;
+  text-shadow: 0 2px 0 #000;
+}
+
+.duel-count {
+  position: absolute;
+  top: 40%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-family: var(--comic);
+  font-size: clamp(72px, 14vw, 150px);
+  line-height: 1;
+  color: #fff;
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+  text-shadow: 0 4px 0 #000, 0 0 40px rgba(0, 0, 0, 0.6);
+  opacity: 0;
+}
+
+.duel-count.pop {
+  animation: duelPop 0.5s cubic-bezier(0.2, 1.4, 0.4, 1) both;
+}
+
+.duel-count.result {
+  top: 31%;
+  font-size: clamp(30px, 5.4vw, 56px);
+  letter-spacing: 2px;
+  white-space: normal;
+  width: min(92vw, 900px);
+  animation: slam 0.35s cubic-bezier(0.2, 1, 0.3, 1) both;
+  opacity: 1;
+}
+
+.duel.won-a .duel-count.result {
+  color: var(--ca);
+}
+
+.duel.won-b .duel-count.result {
+  color: var(--cb);
+}
+
+.duel-foot {
+  margin-bottom: calc(11vh + 10px);
+  width: min(760px, 94vw);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.duel-bar {
+  position: relative;
+  height: 26px;
+  border-radius: 13px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.55);
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+
+.duel-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  transition: width 0.08s linear;
+}
+
+.duel-fill.a {
+  left: 0;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--ca) 70%, #000), var(--ca));
+}
+
+.duel-fill.b {
+  right: 0;
+  background: linear-gradient(270deg, color-mix(in srgb, var(--cb) 70%, #000), var(--cb));
+}
+
+.duel-knot {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 8px;
+  margin-left: -4px;
+  border-radius: 4px;
+  background: #fff;
+  box-shadow: 0 0 14px #fff, 0 0 4px #000;
+  transition: left 0.08s linear;
+}
+
+.duel.danger-a .duel-bar,
+.duel.danger-b .duel-bar {
+  animation: duelPulse 0.4s ease-in-out infinite alternate;
+}
+
+.duel-row {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.duel-pad {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas: 'role taps' 'who taps' 'hint taps';
+  align-items: center;
+  gap: 0 10px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  border: 2px solid var(--c);
+  background: color-mix(in srgb, var(--c) 22%, rgba(10, 10, 16, 0.86));
+  color: #fff;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.duel-pad.a {
+  --c: var(--ca);
+}
+
+.duel-pad.b {
+  --c: var(--cb);
+  grid-template-columns: auto 1fr;
+  grid-template-areas: 'taps role' 'taps who' 'taps hint';
+  text-align: right;
+}
+
+.duel-pad.cpu {
+  cursor: default;
+  opacity: 0.85;
+}
+
+.duel-pad .role {
+  grid-area: role;
+  font-size: 12px;
+  letter-spacing: 2px;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.duel-pad .who {
+  grid-area: who;
+  font-weight: 700;
+  font-size: clamp(15px, 2.2vw, 19px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.duel-pad .hint {
+  grid-area: hint;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: var(--c);
+  filter: brightness(1.35);
+}
+
+.duel-pad .taps {
+  grid-area: taps;
+  font-family: var(--comic);
+  font-size: clamp(26px, 4vw, 40px);
+  min-width: 1.6em;
+  text-align: center;
+}
+
+.duel-pad.hit {
+  animation: duelHit 0.12s ease-out;
+}
+
+.duel-timer {
+  align-self: center;
+  min-width: 64px;
+  text-align: center;
+  font-family: var(--comic);
+  font-size: clamp(24px, 4vw, 36px);
+  color: #fff;
+  text-shadow: 0 2px 0 #000;
+}
+
+.duel.over .duel-pad,
+.duel.over .duel-timer {
+  opacity: 0.55;
+}
+
+.duel.won-a .duel-pad.a,
+.duel.won-b .duel-pad.b {
+  opacity: 1;
+  box-shadow: 0 0 24px var(--c);
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes duelPop {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.8);
+  }
+  35% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(0.95);
+  }
+  70% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.05);
+  }
+}
+
+@keyframes duelHit {
+  50% {
+    transform: scale(1.06);
+    filter: brightness(1.4);
+  }
+}
+
+@keyframes duelPulse {
+  to {
+    box-shadow: 0 0 22px rgba(255, 60, 60, 0.9);
+  }
+}
+
+/* the regular HUD steps aside while the clash is on screen */
+body.dueling .hud-bottom,
+body.dueling #btn-ff {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* Kids mode: soft and bright */
+.duel.kids {
+  font-family: var(--kid-font, 'Fredoka', sans-serif);
+}
+
+.duel.kids .duel-head {
+  margin-top: 12vh;
+}
+
+.duel.kids .duel-title {
+  font-family: var(--kid-font, 'Fredoka', sans-serif);
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: #ff6b9a;
+  text-shadow: 4px 0 0 #fff, -4px 0 0 #fff, 0 4px 0 #fff, 0 -4px 0 #fff, 3px 3px 0 #fff, -3px -3px 0 #fff, 3px -3px 0 #fff, -3px 3px 0 #fff, 0 9px 0 rgba(60, 40, 120, 0.2);
+  animation: kidPopIn 0.5s cubic-bezier(0.2, 1.6, 0.4, 1) both;
+}
+
+.duel.kids .duel-sub {
+  text-transform: none;
+  letter-spacing: 0;
+  color: #3b2d5c;
+  text-shadow: 0 0 6px #fff, 0 0 12px #fff;
+}
+
+.duel.kids .duel-count {
+  font-family: var(--kid-font, 'Fredoka', sans-serif);
+  font-weight: 700;
+  color: #ffd84d;
+  text-shadow: 4px 0 0 #fff, -4px 0 0 #fff, 0 4px 0 #fff, 0 -4px 0 #fff, 0 10px 0 rgba(60, 40, 120, 0.2);
+}
+
+.duel.kids .duel-foot {
+  margin-bottom: 14px;
+}
+
+.duel.kids .duel-bar {
+  height: 30px;
+  border-radius: 15px;
+  border: 3px solid #fff;
+  background: #f1ecff;
+}
+
+.duel.kids .duel-pad {
+  border: 3px solid #fff;
+  border-radius: 22px;
+  background: color-mix(in srgb, var(--c) 25%, #fff);
+  color: #3b2d5c;
+  box-shadow: 0 0 0 3px var(--c), 0 6px 0 rgba(60, 40, 120, 0.2);
+}
+
+.duel.kids .duel-pad .role {
+  color: #7d6f9e;
+}
+
+.duel.kids .duel-pad .hint {
+  filter: none;
+}
+
+.duel.kids .duel-timer {
+  font-family: var(--kid-font, 'Fredoka', sans-serif);
+  font-weight: 700;
+  color: #3b2d5c;
+  text-shadow: 0 0 6px #fff;
+}
+
+@media (max-width: 760px) {
+  .duel-pad {
+    padding: 8px 10px;
+  }
+  .duel-pad .role {
+    font-size: 10px;
+  }
+  .duel-pad .hint {
+    font-size: 12px;
+  }
+  .duel-timer {
+    min-width: 48px;
+  }
+}
