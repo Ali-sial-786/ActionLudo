@@ -8,6 +8,7 @@ import { Hud } from './ui/hud.js';
 import { sfx } from './engine/audio.js';
 import { goreSettings } from './render/gore.js';
 import { initialMode, normalizeMode, saveMode, settings } from './settings.js';
+import * as rules from './game/rules.js';
 
 const storage = (() => {
   try {
@@ -45,7 +46,7 @@ const hud = new Hud({
   onConfigChange: (players) => controller.preview(players),
   onStart: (players) => {
     sfx.unlock();
-    controller.start(players);
+    controller.start(players, hud.rules());
   },
   onArenaOpen: () => {
     sfx.unlock();
@@ -174,4 +175,4 @@ world.idleOrbit = true;
 hud.showSetup();
 
 // Handy for debugging from the console.
-window.actionLudo = { world, controller, hud, sfx, settings, setMode };
+window.actionLudo = { world, controller, hud, sfx, settings, setMode, rules };

@@ -11,6 +11,7 @@ import {
   legalMoves,
   registerRoll,
   resolveDuel,
+  rulesOf,
 } from './rules.js';
 import { chooseMove } from './ai.js';
 import { Duel } from './duel.js';
@@ -380,10 +381,10 @@ export class GameController {
     this.board.showDestination(null);
   }
 
-  async start(players) {
+  async start(players, rules = {}) {
     this.abort();
     const session = this.session;
-    this.game = createGame(players);
+    this.game = createGame(players, rules);
     this.buildPieces(this.game);
     this.world.idleOrbit = false;
     this.hud.showGame(this.game);
@@ -522,14 +523,18 @@ export class GameController {
     if (move.kind === 'release') {
       await this.releaseFromCage(view);
     } else {
-      const path = [];
-      for (let p = move.from + 1; p <= move.to; p++) {
-        path.push(p === FINISH_PROGRESS ? finishSpot(move.token.seat, move.token.index) : this.squarePos(move.token.seat, p));
-      }
-      if (result.duel) {
+      // (a bounce runs up to the centre and back down)
+      const path = (move.steps ?? []).map((p) => (p === FINISH_PROGRESS ? finishSpot(move.token.seat, move.token.index) : this.squarePos(move.token.seat, p)));
+      if (result.duels.length) {
+        // one fight per piece on the square; between fights the attacker steps back to square up again
+        const back = path.length >= 2 ? path[path.length - 2] : view.root.position.clone();
         await this.hopAlong(view, path.slice(0, -1));
         const V = path[path.length - 1];
-        await this.battle(view, this.views.get(result.duel.id), V, (won) => resolveDuel(this.game, result, won), { duel });
+        const clash = duel && rulesOf(this.game).clash;
+        for (const [i, victim] of [...result.duels].entries()) {
+          if (i > 0) await this.hopAlong(view, [back]);
+          await this.battle(view, this.views.get(victim.id), V, (won) => resolveDuel(this.game, result, victim, won), { duel: clash });
+        }
       } else {
         await this.hopAlong(view, path);
       }

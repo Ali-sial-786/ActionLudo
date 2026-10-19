@@ -1,5 +1,6 @@
 import { ANIMALS, COLORS, animalById, blurbOf, moveOf, verbOf } from '../config.js';
 import { isKids } from '../settings.js';
+import { RulesPanel } from './rulesPanel.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -55,6 +56,7 @@ export class Hud {
       };
     });
     this.arenaPick = { atk: { seat: 0, animal: 'eagle' }, vic: { seat: 3, animal: 'tiger' } };
+    this.rulesPanel = new RulesPanel($('house-rules'));
     this.renderSlots();
     this.renderArena();
     this.bind();
@@ -148,6 +150,12 @@ export class Hud {
     }
     this.renderSlots();
     this.renderArena();
+    this.rulesPanel.render();
+  }
+
+  // The house rules chosen on the setup screen.
+  rules() {
+    return this.rulesPanel.get();
   }
 
   goreChecked() {
@@ -264,13 +272,14 @@ export class Hud {
       const color = COLORS[p.seat];
       const animal = animalById(p.animal);
       const home = game.tokens.filter((t) => t.seat === p.seat && t.progress === 56).length;
+      const need = game.rules?.piecesToWin ?? 4;
       const out = game.tokens.filter((t) => t.seat === p.seat && t.progress >= 0 && t.progress < 56).length;
       const rank = game.standings.indexOf(p.seat);
       const chip = el('div', { className: `pchip ${p === active && !game.over ? 'active' : ''} ${p.done ? 'done' : ''}` }, [
         el('div', { className: 'avatar', textContent: animal.emoji }),
         el('div', { className: 'meta' }, [
           el('b', { textContent: p.name + (p.cpu ? ' 🤖' : '') }),
-          el('small', { textContent: rank >= 0 ? `${medals()[rank]} finished` : `🏠 ${home}/4 · 🐾 ${out} out` }),
+          el('small', { textContent: rank >= 0 ? `${medals()[rank]} finished` : `🏠 ${home}/${need} · 🐾 ${out} out` }),
         ]),
       ]);
       chip.style.setProperty('--team', color.css);
