@@ -135,6 +135,8 @@ export class World {
     this.shakeAmount = 0;
     this.shakeOffset = new THREE.Vector3();
     this.cinematic = false;
+    // Set while a script (e.g. the dice cam) owns the camera outside a cinematic.
+    this.directed = false;
     this.homeView = { pos: new THREE.Vector3(), target: new THREE.Vector3(0, 0, 0.6) };
     this.idleOrbit = false;
     // Persistent per-frame callbacks (unaffected by Animator.reset). Receive time-scaled dt.
@@ -170,10 +172,11 @@ export class World {
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
     const s = sun.shadow.camera;
-    s.left = -12;
-    s.right = 12;
-    s.top = 12;
-    s.bottom = -12;
+    // wide enough for the dice trays out on the table
+    s.left = -15;
+    s.right = 15;
+    s.top = 15;
+    s.bottom = -15;
     s.near = 1;
     s.far = 60;
     sun.shadow.bias = -0.0004;
@@ -316,20 +319,65 @@ export class World {
     this.computeHomeView();
   }
 
-  // Fit the whole board (plus a margin) regardless of aspect ratio.
+  // Frame the playing area as closely as the screen allows, between the player chips along the top
+  // and the roll bar along the bottom, from a fairly low angle. Portrait screens are width-limited,
+  // so there the outermost column may be trimmed at the near corners.
   computeHomeView() {
-    // Portrait screens are width-limited, so fit the board itself rather than its bounding circle.
-    const radius = this.camera.aspect < 1 ? 8.6 : 9.6;
-    const vFov = THREE.MathUtils.degToRad(this.camera.fov);
-    const hFov = 2 * Math.atan(Math.tan(vFov / 2) * this.camera.aspect);
-    const fov = Math.min(vFov, hFov);
-    const dist = radius / Math.sin(fov / 2);
-    const elev = THREE.MathUtils.degToRad(this.camera.aspect < 0.8 ? 62 : 55);
-    this.homeView.pos.set(0, Math.sin(elev) * dist, Math.cos(elev) * dist).add(this.homeView.target);
+    const aspect = this.camera.aspect;
+    const portrait = aspect < 0.8;
+    const elev = THREE.MathUtils.degToRad(portrait ? 54 : 42);
+    const ex = portrait ? 7.1 : 7.7;
+    const ez = 7.7;
+    const pts = [];
+    for (const x of [-ex, ex]) for (const z of [-ez, ez]) for (const y of [0.12, 0.82]) pts.push(new THREE.Vector3(x, y, z));
+    const h = this.container.clientHeight || window.innerHeight;
+    const yTop = 1 - 2 * Math.max(portrait ? 0.17 : 0.11, 70 / h);
+    const yBot = -1 + 2 * Math.max(0.12, 92 / h);
+    const cam = (this.fitCamera ??= new THREE.PerspectiveCamera());
+    cam.fov = this.camera.fov;
+    cam.aspect = aspect;
+    cam.updateProjectionMatrix();
+    const dir = new THREE.Vector3(0, Math.sin(elev), Math.cos(elev));
+    const target = new THREE.Vector3();
+    const v = new THREE.Vector3();
+    const measure = (tz, d) => {
+      target.set(0, 0, tz);
+      cam.position.copy(target).addScaledVector(dir, d);
+      cam.lookAt(target);
+      cam.updateMatrixWorld();
+      let lo = Infinity;
+      let hi = -Infinity;
+      let wide = 0;
+      for (const p of pts) {
+        v.copy(p).project(cam);
+        wide = Math.max(wide, Math.abs(v.x));
+        lo = Math.min(lo, v.y);
+        hi = Math.max(hi, v.y);
+      }
+      return { ok: wide <= 0.97 && hi <= yTop && lo >= yBot, mid: (lo + hi) / 2 };
+    };
+    // For each aim point, the closest distance that fits; keep the one that centres the board.
+    let best = null;
+    for (let tz = -3; tz <= 5.001; tz += 0.1) {
+      let near = 5;
+      let far = 120;
+      for (let i = 0; i < 24; i++) {
+        const d = (near + far) / 2;
+        if (measure(tz, d).ok) far = d;
+        else near = d;
+      }
+      const off = Math.abs(measure(tz, far).mid - (yTop + yBot) / 2);
+      if (!best || off < best.off) best = { tz, d: far, off };
+    }
+    const dist = best.d;
+    this.homeView.target.set(0, 0, best.tz);
+    this.homeView.pos.copy(this.homeView.target).addScaledVector(dir, dist);
     this.controls.maxDistance = Math.max(45, dist * 1.4);
+    // fog ranges are tuned relative to the far edge of the board (1.2× the distance at a high angle)
+    const reach = this.homeView.pos.distanceTo(v.set(0, 0, -ez)) / 1.2;
     const [near, far] = this.look?.fogRange ?? THEMES.action.fogRange;
-    this.scene.fog.near = dist * near;
-    this.scene.fog.far = dist * far;
+    this.scene.fog.near = reach * near;
+    this.scene.fog.far = reach * far;
     this.camera.far = Math.max(200, dist * 4);
     this.camera.updateProjectionMatrix();
   }
@@ -435,8 +483,9 @@ export class World {
     }
 
     // During cutscenes the director owns the camera; OrbitControls would clamp it to its zoom limits.
-    this.controls.enabled = !this.cinematic;
-    if (this.cinematic) this.camera.lookAt(this.controls.target);
+    const scripted = this.cinematic || this.directed;
+    this.controls.enabled = !scripted;
+    if (scripted) this.camera.lookAt(this.controls.target);
     else this.controls.update();
     if (this.shakeAmount > 0.001) {
       const near = THREE.MathUtils.clamp(this.camera.position.distanceTo(this.controls.target) / 10, 0.12, 1);

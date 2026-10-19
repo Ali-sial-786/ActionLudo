@@ -1,19 +1,15 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
-import { Ease, arc, rand } from '../engine/anim.js';
-import { BOARD_Y, yardCenter } from './boardMesh.js';
+import { Ease, arc, clamp, rand } from '../engine/anim.js';
+import { AXES, sampleThrow, throwShowing } from '../engine/dicePhysics.js';
+import { DiceTrays, TRAY, trayBounds, trayCenter } from './diceTray.js';
 
 const SIZE = 0.72;
-// BoxGeometry material order: +x, -x, +y, -y, +z, -z. Opposite faces sum to 7.
+const ROUND = 0.1;
+const HOVER = 0.85; // height of the waiting die's centre above the felt
+const UP = new THREE.Vector3(0, 1, 0);
+// BoxGeometry material order (+x, -x, +y, -y, +z, -z, the same order as AXES). Opposite faces sum to 7.
 const FACE_VALUES = [3, 4, 1, 6, 2, 5];
-const FACE_NORMALS = [
-  new THREE.Vector3(1, 0, 0),
-  new THREE.Vector3(-1, 0, 0),
-  new THREE.Vector3(0, 1, 0),
-  new THREE.Vector3(0, -1, 0),
-  new THREE.Vector3(0, 0, 1),
-  new THREE.Vector3(0, 0, -1),
-];
 
 const PIPS = {
   1: [[1, 1]],
@@ -63,17 +59,22 @@ export class Dice {
     this.anim = world.anim;
     this.fx = fx;
     this.sfx = sfx;
-    const geo = new RoundedBoxGeometry(SIZE, SIZE, SIZE, 4, 0.1);
+    this.trays = new DiceTrays(world.scene, theme);
+    const geo = new RoundedBoxGeometry(SIZE, SIZE, SIZE, 4, ROUND);
     this.faceMats = { action: faceMaterials(false), kids: null };
     this.mesh = new THREE.Mesh(geo, this.faceMats.action);
     this.mesh.castShadow = true;
     this.mesh.receiveShadow = true;
     world.scene.add(this.mesh);
-    this.mesh.position.set(0, BOARD_Y + SIZE / 2 + 1.0, 0);
+    this.mesh.position.copy(trayCenter(0)).setY(TRAY.floor + HOVER);
     this.mesh.visible = false;
+    this.seat = 0;
     this.hovering = false;
     this.hoverBase = new THREE.Vector3();
-    this.seat = null;
+    // While held the die rattles in the hand and follows the pointer; `power` builds with time.
+    this.hold = null;
+    // The pointer is projected onto this plane to steer the held die.
+    this.holdPlane = new THREE.Plane(UP, -(TRAY.floor + HOVER));
 
     this.glow = new THREE.Mesh(
       new THREE.RingGeometry(0.42, 0.5, 40),
@@ -83,10 +84,39 @@ export class Dice {
     this.glow.visible = false;
     world.scene.add(this.glow);
 
+    const spinAxis = new THREE.Vector3();
+    const dq = new THREE.Quaternion();
     world.onFrame((dt, time) => {
+      if (this.hold) {
+        const h = this.hold;
+        h.time += dt;
+        h.power = Math.min(1, h.time / 0.9);
+        const before = this.mesh.position.clone();
+        this.mesh.position.lerp(h.target, 1 - Math.exp(-dt * 18));
+        const speed = before.distanceTo(this.mesh.position) / Math.max(dt, 1e-4);
+        h.energy += (Math.min(speed, 12) - h.energy) * Math.min(1, dt * 8);
+        // rattle: a quick, jittery tumble that gets wilder the harder it is shaken
+        spinAxis.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
+        dq.setFromAxisAngle(spinAxis, dt * (7 + 9 * h.power + h.energy * 1.5));
+        this.mesh.quaternion.premultiply(dq);
+        const j = 0.012 + 0.02 * h.power;
+        this.mesh.position.x += (Math.random() - 0.5) * j;
+        this.mesh.position.y += (Math.random() - 0.5) * j;
+        this.glow.position.x = this.mesh.position.x;
+        this.glow.position.z = this.mesh.position.z;
+        const s = 1 + h.power * 0.7 + Math.sin(time * 18) * 0.04 * h.power;
+        this.glow.scale.set(s, s, s);
+        this.glow.material.opacity = 0.55 + 0.4 * h.power;
+        h.rattle -= dt;
+        if (h.rattle <= 0) {
+          this.sfx?.play('diceRattle', { power: 0.35 + 0.4 * h.power + Math.min(0.3, h.energy / 20) });
+          h.rattle = 0.06 + Math.random() * 0.07 - Math.min(0.03, h.energy / 300);
+        }
+        return;
+      }
       if (!this.hovering) return;
       this.mesh.position.copy(this.hoverBase);
-      this.mesh.position.y += Math.sin(time * 3) * 0.12;
+      this.mesh.position.y += Math.sin(time * 3) * 0.1;
       this.mesh.rotation.x += dt * 0.9;
       this.mesh.rotation.y += dt * 1.3;
       const s = 1 + Math.sin(time * 5) * 0.08;
@@ -101,36 +131,59 @@ export class Dice {
     this.mesh.material = kids ? this.faceMats.kids : this.faceMats.action;
     // a slightly chunkier, toy-like die for little hands
     this.mesh.scale.setScalar(kids ? 1.12 : 1);
+    this.trays.setTheme(theme);
     this.theme = kids ? 'kids' : 'action';
+  }
+
+  setSeats(seats) {
+    this.trays.setSeats(seats);
+  }
+
+  // Let go of the die without throwing it (the game was interrupted).
+  drop() {
+    this.hold = null;
   }
 
   hide() {
     this.hovering = false;
+    this.hold = null;
     this.glow.visible = false;
     this.mesh.visible = false;
   }
 
-  restPosition(seat) {
-    return yardCenter(seat).setY(BOARD_Y + (SIZE * this.mesh.scale.y) / 2);
+  get size() {
+    return SIZE * this.mesh.scale.x;
   }
 
-  // Float the die above the given player's yard, waiting to be rolled.
+  get held() {
+    return !!this.hold;
+  }
+
+  trayCenter(seat = this.seat) {
+    return trayCenter(seat);
+  }
+
+  // Float the die above the given player's tray, waiting to be thrown.
   async present(seat, colorHex) {
     this.hovering = false;
+    this.hold = null;
+    const to = trayCenter(seat).setY(TRAY.floor + HOVER);
     if (!this.mesh.visible) {
       this.mesh.visible = true;
-      this.mesh.position.copy(this.restPosition(seat)).setY(BOARD_Y + 1.25);
+      this.mesh.position.copy(to);
     }
     const from = this.mesh.position.clone();
-    const to = this.restPosition(seat).setY(BOARD_Y + 1.25);
     this.seat = seat;
     this.glow.material.color.setHex(colorHex);
-    this.glow.position.copy(this.restPosition(seat)).setY(BOARD_Y + 0.02);
+    this.glow.material.opacity = 0.7;
+    this.glow.scale.setScalar(1);
+    this.glow.position.copy(to).setY(TRAY.floor + 0.01);
     const dist = from.distanceTo(to);
     if (dist > 0.05) {
-      await this.anim.tween(Math.min(0.7, 0.25 + dist * 0.04), (k) => {
+      this.sfx?.play('whoosh', { dur: 0.3 });
+      await this.anim.tween(Math.min(0.75, 0.3 + dist * 0.025), (k) => {
         this.mesh.position.lerpVectors(from, to, k);
-        this.mesh.position.y += arc(k, Math.min(3, dist * 0.3));
+        this.mesh.position.y += arc(k, Math.min(3, dist * 0.2));
       }, Ease.inOutCubic);
     }
     this.hoverBase.copy(to);
@@ -138,64 +191,132 @@ export class Dice {
     this.glow.visible = true;
   }
 
-  orientationFor(value) {
-    const idx = FACE_VALUES.indexOf(value);
-    const q = new THREE.Quaternion().setFromUnitVectors(FACE_NORMALS[idx], new THREE.Vector3(0, 1, 0));
-    const yaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), rand(0, Math.PI * 2));
-    return yaw.multiply(q);
+  // ---------------------------------------------------------------- the throw
+  // Inner zone the held die is kept within, so it always starts the throw over the felt.
+  clampToTray(p) {
+    const b = trayBounds(this.seat);
+    const m = this.size / 2 + 0.12;
+    p.x = clamp(p.x, b.minX + m, b.maxX - m);
+    p.z = clamp(p.z, b.minZ + m, b.maxZ - m);
+    p.y = TRAY.floor + HOVER;
+    return p;
   }
 
-  // Throw the die; it tumbles, bounces and settles showing `value`.
-  async roll(value) {
+  // Pick the die up: it rattles in the hand until released.
+  grab() {
+    if (this.hold) return;
     this.hovering = false;
-    this.glow.visible = false;
-    const seat = this.seat ?? 0;
-    const rest = this.restPosition(seat).add(new THREE.Vector3(rand(-0.25, 0.25), 0, rand(-0.25, 0.25)));
-    const start = this.mesh.position.clone();
-    start.y += 0.6;
-    const qEnd = this.orientationFor(value);
-    const axis = new THREE.Vector3(rand(-1, 1), rand(-0.3, 0.3), rand(-1, 1)).normalize();
-    const spin = Math.PI * 2 * Math.round(rand(3, 5)) + rand(0, Math.PI);
-    const g = 20;
-    const h0 = start.y - rest.y;
-    const bounces = [0.55, 0.2, 0.06];
-    const segs = [{ t: Math.sqrt((2 * h0) / g), kind: 'fall' }];
-    for (const h of bounces) segs.push({ t: 2 * Math.sqrt((2 * h) / g), h, kind: 'bounce' });
-    const total = segs.reduce((s, x) => s + x.t, 0) + 0.15;
+    this.glow.visible = true;
+    this.hold = { time: 0, power: 0, energy: 0, rattle: 0, target: this.clampToTray(this.mesh.position.clone()), trail: [] };
     this.sfx?.play('diceShake');
-    let lastSeg = -1;
-    const qTmp = new THREE.Quaternion();
-    await this.anim.tween(total, (_, k) => {
-      const t = k * total;
-      // vertical position from the bounce schedule
-      let acc = 0;
-      let y = 0;
-      let segIndex = segs.length;
-      for (let i = 0; i < segs.length; i++) {
-        if (t < acc + segs[i].t) {
-          const lt = t - acc;
-          segIndex = i;
-          if (segs[i].kind === 'fall') y = h0 - 0.5 * g * lt * lt;
-          else y = arc(lt / segs[i].t, segs[i].h);
-          break;
-        }
-        acc += segs[i].t;
-      }
-      if (segIndex !== lastSeg && segIndex > 0) {
-        const power = segIndex < segs.length ? 1 / segIndex : 0.2;
-        this.sfx?.play('diceHit', { power });
-        if (segIndex === 1) this.fx.dust(rest.clone(), 6, 0xdcd3c0);
-      }
-      lastSeg = segIndex;
-      const hk = Ease.outQuad(Math.min(1, k * 1.15));
-      this.mesh.position.lerpVectors(start, rest, hk);
-      this.mesh.position.y = rest.y + Math.max(0, y);
-      const remaining = spin * Math.pow(1 - Math.min(1, k * 1.08), 2.2);
-      qTmp.setFromAxisAngle(axis, remaining);
-      this.mesh.quaternion.copy(qEnd).multiply(qTmp);
+  }
+
+  // Move the held die toward a point on the hover plane (from the pointer). The fling is measured
+  // from the raw pointer motion, so a flick toward a wall still counts even though the die stops.
+  aim(point) {
+    if (!this.hold) return;
+    this.hold.target.copy(this.clampToTray(point.clone()));
+    const now = performance.now() / 1000;
+    this.hold.trail.push({ t: now, p: point.clone() });
+    while (this.hold.trail.length > 2 && now - this.hold.trail[0].t > 0.12) this.hold.trail.shift();
+  }
+
+  // Let go. A flick throws the die the way it was flung; otherwise it is tossed with the
+  // strength built up while shaking. Returns the launch state for `throw()`.
+  release() {
+    const h = this.hold ?? { time: 0, power: 0, energy: 0, trail: [] };
+    this.hold = null;
+    const tr = h.trail;
+    const fling = new THREE.Vector3();
+    if (tr.length >= 2) {
+      const a = tr[0];
+      const b = tr[tr.length - 1];
+      const dt = b.t - a.t;
+      if (dt > 0.01 && performance.now() / 1000 - b.t < 0.15) fling.subVectors(b.p, a.p).setY(0).divideScalar(dt);
+    }
+    let dir;
+    let speed;
+    if (fling.length() > 1.2) {
+      dir = fling.clone().normalize();
+      speed = clamp(fling.length() * 0.9, 2.4, 8.5);
+    } else {
+      const ang = rand(0, Math.PI * 2);
+      dir = new THREE.Vector3(Math.cos(ang), 0, Math.sin(ang));
+      // a quick tap gets a toss of random strength; otherwise the longer the shake, the harder
+      speed = 2.4 + 4.6 * (h.time < 0.15 ? rand(0.25, 0.75) : h.power);
+    }
+    const pos = this.clampToTray(this.mesh.position.clone());
+    const vel = dir.clone().multiplyScalar(speed).setY(rand(0.6, 1.0) + 1.0 * h.power);
+    // tumble forward along the throw, with some wobble and the shake's energy on top
+    const axis = new THREE.Vector3().crossVectors(UP, dir).add(new THREE.Vector3(rand(-0.5, 0.5), rand(-0.5, 0.5), rand(-0.5, 0.5))).normalize();
+    const spin = axis.multiplyScalar(8 + speed * 1.8 + rand(0, 5) + Math.min(6, h.energy * 0.5));
+    return { pos, vel, spin, power: Math.max(h.power, speed / 8.5) };
+  }
+
+  // CPU players: a quick shake, then a toss in a random direction.
+  async autoThrow() {
+    this.grab();
+    const c = this.hoverBase.clone();
+    const phase = rand(0, Math.PI * 2);
+    await this.anim.tween(rand(0.3, 0.45), (k) => {
+      const a = phase + k * 14;
+      if (this.hold) this.hold.target = this.clampToTray(c.clone().add(new THREE.Vector3(Math.cos(a) * 0.18, 0, Math.sin(a) * 0.18)));
     });
-    this.mesh.position.copy(rest);
-    this.mesh.quaternion.copy(qEnd);
+    if (this.hold) this.hold.power = rand(0.4, 0.9);
+    return this.release();
+  }
+
+  // Throw the die so it comes to rest showing `value`, which was rolled fairly beforehand. The
+  // tumble is real physics fitted to that value (see throwShowing): the gesture shapes the throw,
+  // never the result.
+  async throw(value, spec) {
+    this.hovering = false;
+    this.hold = null;
+    this.glow.visible = false;
+    const { sim, label } = throwShowing(AXES[FACE_VALUES.indexOf(value)], {
+      size: this.size,
+      round: ROUND * this.mesh.scale.x,
+      pos: spec.pos,
+      vel: spec.vel,
+      spin: spec.spin,
+      quat: this.mesh.quaternion,
+      bounds: trayBounds(this.seat),
+    });
+
+    this.sfx?.play('whoosh', { dur: 0.25 });
+    const p = new THREE.Vector3();
+    const q = new THREE.Quaternion();
+    let next = 0;
+    let landed = false;
+    await this.anim.tween(sim.duration, (_, k) => {
+      const t = k * sim.duration;
+      sampleThrow(sim, t, p, q);
+      this.mesh.position.copy(p);
+      this.mesh.quaternion.copy(q).multiply(label);
+      while (next < sim.hits.length && sim.hits[next].t <= t) {
+        const hit = sim.hits[next++];
+        this.sfx?.play(hit.wall ? 'diceWall' : 'diceHit', { power: 0.3 + 0.7 * hit.power });
+        if (!hit.wall && !landed) {
+          landed = true;
+          this.fx.dust(p.clone().setY(TRAY.floor + 0.02), 6, this.theme === 'kids' ? 0xffffff : 0xcfc4ae);
+        }
+      }
+    });
+    this.mesh.position.copy(sim.rest.p);
+    this.mesh.quaternion.copy(sim.rest.q).multiply(label);
     return value;
+  }
+
+  // A little flourish once the die has settled; a six gets the full treatment.
+  celebrate(value, colorHex) {
+    const at = this.mesh.position.clone();
+    const kids = this.theme === 'kids';
+    this.fx.ring(at, { color: value === 6 ? 0xffd34d : colorHex, from: 0.3, to: value === 6 ? 2.2 : 1.3, duration: 0.5, y: TRAY.floor + 0.012, opacity: 0.8 });
+    if (value === 6) {
+      this.fx.sparks(at.clone().setY(at.y + this.size * 0.6), kids ? 0xff79d0 : 0xffd34d, 26, 3.4);
+      this.sfx?.play('diceSix');
+    } else {
+      this.sfx?.play('diceSettle', { value });
+    }
   }
 }

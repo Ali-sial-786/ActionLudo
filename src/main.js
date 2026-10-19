@@ -71,6 +71,11 @@ const hud = new Hud({
     sfx.unlock();
     controller.requestRoll();
   },
+  onRollPress: () => {
+    sfx.unlock();
+    controller.pressRoll();
+  },
+  onRollRelease: () => controller.releaseRoll(),
   onSpeed: () => {
     speedIndex = (speedIndex + 1) % SPEEDS.length;
     applySpeed();
@@ -81,7 +86,7 @@ const hud = new Hud({
     return !sfx.muted;
   },
   onCamera: () => {
-    if (!world.cinematic) world.resetView(0.6);
+    if (!world.cinematic && !world.directed) world.resetView(0.6);
   },
   onMenu: () => toMenu(),
   onGore: (on) => (goreSettings.enabled = on && settings.mode !== 'kids'),
@@ -147,14 +152,20 @@ world.onFrame(() => {
   ffButton.classList.toggle('on', fastForward);
 });
 
+// Space / Enter: hold to shake the die, release to throw it (or fast-forward a cinematic).
+const isRollKey = (e) => (e.code === 'Space' || e.code === 'Enter') && !(e.target instanceof HTMLInputElement);
 window.addEventListener('keydown', (e) => {
-  if (e.target instanceof HTMLInputElement) return;
-  if (e.code === 'Space' || e.code === 'Enter') {
-    e.preventDefault();
-    sfx.unlock();
-    if (world.cinematic) startFastForward();
-    else controller.requestRoll();
-  }
+  if (!isRollKey(e)) return;
+  e.preventDefault();
+  if (e.repeat) return;
+  sfx.unlock();
+  if (world.cinematic) startFastForward();
+  else controller.pressRoll();
+});
+window.addEventListener('keyup', (e) => {
+  if (!isRollKey(e)) return;
+  e.preventDefault();
+  controller.releaseRoll();
 });
 
 applyMode();

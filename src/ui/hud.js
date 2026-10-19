@@ -435,7 +435,11 @@ export class Hud {
       h.onFight(this.arenaPick);
     };
     $('btn-arena-skip').onclick = () => h.onArenaSkip();
-    $('btn-roll').onclick = () => h.onRoll();
+    // press and hold to shake, release to throw; a keyboard "click" is a quick toss
+    const roll = $('btn-roll');
+    roll.onpointerdown = () => h.onRollPress?.();
+    roll.onpointerup = roll.onpointerleave = roll.onpointercancel = () => h.onRollRelease?.();
+    roll.onclick = (e) => e.detail === 0 && h.onRoll();
     $('btn-speed').onclick = (e) => {
       const next = h.onSpeed();
       e.currentTarget.textContent = `${next}×`;

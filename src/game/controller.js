@@ -15,6 +15,7 @@ import { chooseMove } from './ai.js';
 import { TokenView } from '../render/token.js';
 import { Cage, unlockWithKey } from '../render/cage.js';
 import { BOARD_Y, finishSpot, squareWorld, yardCenter, yardSpot } from '../render/boardMesh.js';
+import { TRAY } from '../render/diceTray.js';
 import { ATTACKS, makeContext, victimReacts } from '../render/battles.js';
 import { KID_ATTACKS, kidFloatHome, kidVictimReacts } from '../render/battlesKid.js';
 import { isKids, settings } from '../settings.js';
@@ -48,7 +49,7 @@ const CANDY = [0xff6b8b, 0xffb84d, 0xffe066, 0x6fdc8c, 0x5ec8ff, 0xb49bff, 0xfff
 const COPY = {
   action: {
     rolling: (who) => `${who} is rolling…`,
-    yourRoll: (who) => `${who}, roll the die! <kbd>Space</kbd>`,
+    yourRoll: (who) => `${who}, grab the die and fling it! <kbd>Space</kbd>`,
     forfeit: 'Three 6s in a row — turn forfeited!',
     noMovesSix: 'No moves — but a 6 rolls again!',
     noMoves: (roll) => `No moves with a ${roll}.`,
@@ -59,7 +60,7 @@ const COPY = {
   },
   kids: {
     rolling: (who) => `${who} is rolling…`,
-    yourRoll: (who) => `${who}, your turn — tap the die! <kbd>Space</kbd>`,
+    yourRoll: (who) => `${who}, grab the die and toss it! 🎲`,
     forfeit: 'Oopsie! Three 6s in a row — turn skipped!',
     noMovesSix: 'No hops this time — but a 6 rolls again!',
     noMoves: (roll) => `No hops with a ${roll} — next friend's turn!`,
@@ -109,6 +110,7 @@ export class GameController {
 
   buildPieces(game) {
     this.clearPieces();
+    this.dice.setSeats(game.players.map((p) => p.seat));
     for (const player of game.players) {
       const color = COLORS[player.seat];
       for (const token of game.tokens.filter((t) => t.seat === player.seat)) {
@@ -195,17 +197,52 @@ export class GameController {
   setupInput() {
     const el = this.world.renderer.domElement;
     let down = null;
+    // While a roll is pending, pressing anywhere picks the die up; it follows the pointer over the
+    // tray while held, and letting go throws it (a flick throws it the way it was flung).
+    this.rollPointer = null;
+    const letGo = (e) => {
+      if (this.rollPointer !== e.pointerId) return false;
+      this.rollPointer = null;
+      down = null;
+      this.throwDie();
+      return true;
+    };
     el.addEventListener('pointerdown', (e) => {
       down = { x: e.clientX, y: e.clientY };
+      if (this.pending?.type === 'roll' && this.rollPointer === null) {
+        this.sfx.unlock();
+        this.rollPointer = e.pointerId;
+        el.setPointerCapture?.(e.pointerId);
+        this.dice.grab();
+        this.aimDie(e);
+      }
     });
+    el.addEventListener('pointercancel', letGo);
     el.addEventListener('pointerup', (e) => {
+      if (letGo(e)) return;
       if (!down) return;
       const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
       down = null;
       if (moved > 8) return;
       this.handleClick(e);
     });
-    el.addEventListener('pointermove', (e) => this.handleHover(e));
+    el.addEventListener('pointermove', (e) => {
+      if (this.rollPointer === e.pointerId) this.aimDie(e);
+      else this.handleHover(e);
+    });
+  }
+
+  aimDie(e) {
+    const rect = this.world.renderer.domElement.getBoundingClientRect();
+    this.pointer.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+    this.raycaster.setFromCamera(this.pointer, this.world.camera);
+    const point = new THREE.Vector3();
+    if (this.raycaster.ray.intersectPlane(this.dice.holdPlane, point)) this.dice.aim(point);
+  }
+
+  throwDie() {
+    if (this.pending?.type !== 'roll' || !this.dice.held) return;
+    this.resolvePending(this.dice.release());
   }
 
   pick(e) {
@@ -213,9 +250,7 @@ export class GameController {
     this.pointer.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
     this.raycaster.setFromCamera(this.pointer, this.world.camera);
     if (!this.pending) return null;
-    if (this.pending.type === 'roll') {
-      return this.raycaster.intersectObject(this.dice.mesh, false).length ? { roll: true } : null;
-    }
+    if (this.pending.type === 'roll') return null;
     const targets = [];
     for (const m of this.pending.moves) {
       const v = this.views.get(m.token.id);
@@ -253,8 +288,7 @@ export class GameController {
     this.sfx.unlock();
     const hit = this.pick(e);
     if (!hit || !this.pending) return;
-    if (hit.roll && this.pending.type === 'roll') this.resolvePending(true);
-    else if (hit.move && this.pending.type === 'move') this.resolvePending(hit.move);
+    if (hit.move && this.pending.type === 'move') this.resolvePending(hit.move);
   }
 
   handleHover(e) {
@@ -294,8 +328,21 @@ export class GameController {
     });
   }
 
+  // Space / Enter / the Roll button: press and hold to shake, release to throw. A plain click
+  // (requestRoll) is a quick toss.
+  pressRoll() {
+    if (this.pending?.type !== 'roll' || this.dice.held) return;
+    this.dice.grab();
+  }
+
+  releaseRoll() {
+    if (this.rollPointer === null) this.throwDie();
+  }
+
   requestRoll() {
-    if (this.pending?.type === 'roll') this.resolvePending(true);
+    if (this.pending?.type !== 'roll') return;
+    this.dice.grab();
+    this.throwDie();
   }
 
   waitForMove(moves) {
@@ -311,6 +358,10 @@ export class GameController {
     this.pending = null;
     this.anim.reset();
     this.world.cinematic = false;
+    this.world.directed = false;
+    this.diceCamReturn = null;
+    this.rollPointer = null;
+    this.dice.drop();
     this.world.slow.hold = 0;
     this.anim.slow = 1;
     this.world.setCinematicLook(false);
@@ -335,32 +386,62 @@ export class GameController {
     return session === this.session;
   }
 
+  // The dice cam: swoop over to the player's tray, let them grab, shake and fling the die (CPU
+  // players just toss it), follow the tumble and push in on the result. The camera stays there
+  // until leaveDiceCam(), so a roll with no moves can go straight on to the next player's tray.
+  async rollDie(player, message, session) {
+    const { world, dice } = this;
+    const color = COLORS[player.seat];
+    this.diceCamReturn ??= this.saveCamera();
+    world.directed = true;
+    const tray = dice.trayCenter(player.seat).setY(TRAY.floor + 0.3);
+    const shot = world.frameView(tray, 2.4, 38);
+    this.hud.setMessage(message);
+    await Promise.all([dice.present(player.seat, color.hex), world.cameraTo(shot.pos, shot.target, player.cpu ? 0.6 : 0.7)]);
+    if (!this.alive(session)) return null;
+    let spec;
+    if (player.cpu) {
+      spec = await dice.autoThrow();
+    } else {
+      spec = await this.waitForRoll();
+      this.hud.enableRoll(false);
+    }
+    if (!this.alive(session)) return null;
+    // The number is drawn only now, as the die leaves the hand, and nothing about the throw can
+    // change it: the tumble is fitted to the number, never the other way round.
+    const roll = fairRoll();
+    const follow = this.anim.every((dt) => world.follow(world.frameView(dice.mesh.position.clone().setY(TRAY.floor + 0.25), 1.8, 36), dt, 3.5));
+    await dice.throw(roll, spec);
+    follow();
+    if (!this.alive(session)) return null;
+    const close = world.frameView(dice.mesh.position.clone(), 0.95, 58);
+    const push = world.cameraTo(close.pos, close.target, 0.4, Ease.outCubic);
+    dice.celebrate(roll, color.hex);
+    this.hud.showRoll(roll, color.css);
+    await push;
+    await this.anim.wait(player.cpu ? 0.25 : 0.45);
+    return roll;
+  }
+
+  async leaveDiceCam(duration = 0.6) {
+    const saved = this.diceCamReturn;
+    if (!saved) return;
+    await this.restoreCamera(saved, duration);
+    this.diceCamReturn = null;
+    this.world.directed = false;
+  }
+
   async loop(session) {
     const g = this.game;
     const text = copy();
     const kids = isKids();
     while (!g.over) {
       const player = currentPlayer(g);
-      const color = COLORS[player.seat];
       const animal = animalById(player.animal);
       const who = `${animal.emoji} ${player.name}`;
       this.hud.setTurn(g, player);
-      await this.dice.present(player.seat, color.hex);
-      if (!this.alive(session)) return;
-
-      if (player.cpu) {
-        this.hud.setMessage(text.rolling(who));
-        await this.anim.wait(0.45);
-      } else {
-        this.hud.setMessage(text.yourRoll(who));
-        await this.waitForRoll();
-        this.hud.enableRoll(false);
-      }
-      if (!this.alive(session)) return;
-      const roll = fairRoll();
-      await this.dice.roll(roll);
-      if (!this.alive(session)) return;
-      this.hud.showRoll(roll, color.css);
+      const roll = await this.rollDie(player, player.cpu ? text.rolling(who) : text.yourRoll(who), session);
+      if (roll === null || !this.alive(session)) return;
 
       if (registerRoll(g, roll).forfeit) {
         this.sfx.play('sad');
@@ -379,6 +460,9 @@ export class GameController {
         continue;
       }
 
+      // there's a move to make: back to the board
+      await this.leaveDiceCam(player.cpu ? 0.5 : 0.6);
+      if (!this.alive(session)) return;
       let move;
       const distinct = distinctMoves(moves);
       if (player.cpu) {

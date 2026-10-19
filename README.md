@@ -71,9 +71,15 @@ The attacker decides the kill; the victim's own anatomy is what gets torn off (a
 
 The die uses `crypto.getRandomValues` with rejection sampling, so every face has exactly a 1/6 chance.
 
+### Throwing the die
+
+Each player has a felt-lined dice tray beside their yard. On your turn the camera swoops over to it: **grab the die, shake it and fling it**. It rattles in your hand (harder the longer and wilder you shake), then tumbles across the tray under real physics, knocking off the walls, while the camera follows it and pushes in on the result. A six gets a golden burst.
+
+The throw is for fun only: the number is drawn fairly the moment the die leaves your hand, and the tumble is fitted to it. The throw is re-simulated with small, invisible changes to its spin until the physics itself lands on that number, so the die always behaves like a real one and the gesture can never influence the result.
+
 ## Controls
 
-- **Roll:** click the hovering die, press the **Roll** button, or hit <kbd>Space</kbd>.
+- **Roll:** press anywhere on the board to pick up the die, drag to shake it and flick to throw it. Or hold <kbd>Space</kbd> (or the **Roll** button) to shake and let go to throw; a quick tap tosses it straight away.
 - **Move:** click a glowing animal (hover shows where it will land).
 - **Camera:** drag to orbit, scroll or pinch to zoom, 🎥 resets the view.
 - **1× / 2× / 3×** changes animation speed; during a kill, **⏩ Fast-forward** (or <kbd>Space</kbd>) speeds through it and skips the slow motion. 🔊 toggles sound.
@@ -116,7 +122,9 @@ src/
   render/effects.js   dust, water, sparks, shockwaves
   render/chains.js    instanced chain links along any path
   render/cage.js      cages, padlocks and the golden key
-  render/dice.js      3D die with bounce-and-settle roll
+  render/dice.js      the die: hover, grab-and-shake, fling, physics playback, result flourish
+  render/diceTray.js  felt-lined dice trays beside each yard (the throw's physics bounds)
+  engine/dicePhysics.js  rigid-body tumble of the die, and fitting a throw to a fair roll
   render/world.js     renderer, lights, post-processing, camera moves, screen shake, Action/Kids looks
   render/scenery.js   Kids-mode sky dome, clouds, hills, trees, meadow and picnic cloth
   render/animalsKid.js  cute Kids-mode animals
@@ -125,4 +133,5 @@ src/
   engine/kidSounds.js   Kids-mode sound effects (yay, tada, boing, bubble, squeak, giggle, poof)
   ui/hud.js           setup screen, mode switch, arena, HUD, banners
 tests/rules.test.js   node:test suite for the rules and AI
+tests/dice.test.js    dice physics: throws settle in the tray and always show the rolled number
 ```
