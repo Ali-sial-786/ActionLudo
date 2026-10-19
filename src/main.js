@@ -91,6 +91,7 @@ const hud = new Hud({
   },
   onMenu: () => toMenu(),
   onGore: (on) => (goreSettings.enabled = on && settings.mode !== 'kids'),
+  onAmbience: (on) => sfx.setAmbience(on),
   onMode: (mode) => {
     sfx.unlock();
     if (normalizeMode(mode) === settings.mode) return;
@@ -124,6 +125,7 @@ function applyMode() {
   const { mode } = settings;
   applyPageTheme(mode);
   goreSettings.enabled = mode !== 'kids' && hud.goreChecked();
+  sfx.setMode(mode);
   world.setTheme(mode);
   board.setTheme(mode);
   dice.setTheme(mode);

@@ -432,6 +432,21 @@ export class Hud {
       h.onGore?.(gore.checked);
     };
     h.onGore?.(gore.checked);
+    const ambience = $('opt-ambience');
+    try {
+      ambience.checked = localStorage.getItem('action-ludo-ambience') !== 'off';
+    } catch {
+      /* storage unavailable */
+    }
+    ambience.onchange = () => {
+      try {
+        localStorage.setItem('action-ludo-ambience', ambience.checked ? 'on' : 'off');
+      } catch {
+        /* storage unavailable */
+      }
+      h.onAmbience?.(ambience.checked);
+    };
+    h.onAmbience?.(ambience.checked);
     for (const b of document.querySelectorAll('#mode-switch [data-mode]')) {
       b.onclick = () => h.onMode?.(b.dataset.mode);
     }

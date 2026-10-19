@@ -571,7 +571,7 @@ export class GameController {
       const ra = view.root.rotation.y;
       const rb = Math.atan2(to.x - from.x, to.z - from.z);
       const turn = ((rb - ra + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
-      this.sfx.play('hop', { step: i });
+      this.sfx.play('hop', { step: i, pan: this.world.panAt(from) });
       await this.anim.tween(0.2, (k) => {
         // each hop launches and settles (eased), so the squares read as separate steps
         view.root.position.lerpVectors(from, to, Ease.inOutSine(k));
@@ -587,8 +587,9 @@ export class GameController {
     }
 
     // touchdown: dust, then spring back up out of the squash
-    if (kids) this.sfx.play('boing');
-    else this.sfx.play('land');
+    const pan = this.world.panAt(view.root.position);
+    if (kids) this.sfx.play('boing', { pan });
+    else this.sfx.play('land', { pan });
     this.fx.dust(view.root.position.clone().setY(BOARD_Y + 0.03), 6, kids ? 0xfff4e0 : undefined);
     await this.anim.tween(kids ? 0.24 : 0.16, (k) => {
       view.hopPose(1 - (1 - crouch) * Math.cos(k * Math.PI * 2.5) * (1 - k), 0, 0);

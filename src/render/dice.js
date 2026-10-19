@@ -295,7 +295,7 @@ export class Dice {
       this.mesh.quaternion.copy(q).multiply(label);
       while (next < sim.hits.length && sim.hits[next].t <= t) {
         const hit = sim.hits[next++];
-        this.sfx?.play(hit.wall ? 'diceWall' : 'diceHit', { power: 0.3 + 0.7 * hit.power });
+        this.sfx?.play(hit.wall ? 'diceWall' : 'diceHit', { power: 0.3 + 0.7 * hit.power, pan: this.world.panAt(p) });
         if (!hit.wall && !landed) {
           landed = true;
           this.fx.dust(p.clone().setY(TRAY.floor + 0.02), 6, this.theme === 'kids' ? 0xffffff : 0xcfc4ae);

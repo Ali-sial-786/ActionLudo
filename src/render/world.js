@@ -467,6 +467,12 @@ export class World {
     this.transient.clear();
   }
 
+  // Stereo position (-1 … 1) of a point in the scene, for panning its sounds.
+  panAt(pos) {
+    const v = pos.clone().project(this.camera);
+    return Math.max(-1, Math.min(1, v.x)) * 0.6;
+  }
+
   onFrame(fn) {
     this.frameFns.add(fn);
     return () => this.frameFns.delete(fn);
