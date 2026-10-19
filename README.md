@@ -102,7 +102,20 @@ npm run preview   # serve the production build
 npm test          # rules / AI unit tests
 ```
 
-The build uses relative paths, so `dist/` can be hosted from any static host or sub-folder (GitHub Pages, Netlify, S3…).
+The build uses relative paths, so `dist/` can also be hosted from any static host or sub-folder.
+
+## Web app
+
+Action Ludo is an installable web app: no account, no sign-in, just open it and play. It has a web app manifest and icons, so browsers offer **Install** / **Add to Home Screen**, and a small service worker (`public/sw.js`) that caches the game after the first visit so it also runs offline. Settings, player setup and house rules are kept in the browser's local storage.
+
+### Deploying to Firebase Hosting
+
+The site deploys to the Firebase project **actionludo-df9cc** (`.firebaserc`, `firebase.json`).
+
+- **Automatically, from GitHub:** `.github/workflows/firebase-hosting.yml` builds, tests and deploys every push to `main` (and gives pull requests a preview URL). It needs one repository secret, `FIREBASE_SERVICE_ACCOUNT_ACTIONLUDO_DF9CC`, holding the JSON key of a service account allowed to deploy to the project. The easiest way to create it is `npx firebase-tools init hosting:github` (choose the existing `dist` setup and keep `firebase.json`); or create a key in the Google Cloud console (IAM → Service accounts) and add it under the repo's Settings → Secrets and variables → Actions. Until the secret exists the workflow still builds and tests, and skips the deploy.
+- **By hand:** `npx firebase-tools login` once, then `npm run deploy`.
+
+Hosting serves the hashed `assets/` with a one-year immutable cache, while `index.html`, `sw.js` and the manifest are always revalidated, so a new release reaches players on their next visit.
 
 ## How it's built
 

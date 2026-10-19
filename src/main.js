@@ -176,3 +176,8 @@ hud.showSetup();
 
 // Handy for debugging from the console.
 window.actionLudo = { world, controller, hud, sfx, settings, setMode, rules };
+
+// Installable web app: the service worker caches the game so it also runs offline.
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
+}
