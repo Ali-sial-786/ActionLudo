@@ -94,8 +94,30 @@ function flatGeometry(shape, depth) {
   return g;
 }
 
+// Material looks per game mode: [color, roughness, metalness]. Action: wood and stone; Kids: a candy-coloured toy board.
+const BOARD_THEMES = {
+  action: {
+    tile: [0xf5efe3, 0.7, 0],
+    grout: [0x2a1d14, 0.9, 0],
+    frame: [0x6b4428, 0.55, 0.05],
+    star: [0x9aa3b5, 0.4, 0.4],
+    pad: [0xf8f4ec, 0.75, 0],
+    team: 0.55,
+    dark: 0.6,
+  },
+  kids: {
+    tile: [0xfffbf3, 0.55, 0],
+    grout: [0x9d8bd8, 0.8, 0],
+    frame: [0xffc46b, 0.45, 0],
+    star: [0xffcf3a, 0.35, 0.15],
+    pad: [0xfffbf3, 0.6, 0],
+    team: 0.45,
+    dark: 0.78,
+  },
+};
+
 export class BoardView {
-  constructor(scene) {
+  constructor(scene, theme = 'action') {
     this.group = new THREE.Group();
     scene.add(this.group);
     this.mats = {
@@ -114,6 +136,26 @@ export class BoardView {
     });
     this.build();
     this.buildMarkers();
+    this.setTheme(theme);
+  }
+
+  setTheme(theme) {
+    const t = BOARD_THEMES[theme] ?? BOARD_THEMES.action;
+    for (const key of ['tile', 'grout', 'frame', 'star', 'pad']) {
+      const [color, roughness, metalness] = t[key];
+      const m = this.mats[key];
+      m.color.setHex(color);
+      m.roughness = roughness;
+      m.metalness = metalness;
+    }
+    COLORS.forEach((c, i) => {
+      this.teamMats[i].roughness = t.team;
+      // yard spots: a deeper shade in Action, a soft pastel tint in Kids
+      const dark = new THREE.Color(c.hex);
+      if (theme === 'kids') dark.lerp(new THREE.Color(0xffffff), 1 - t.dark);
+      else dark.multiplyScalar(t.dark);
+      this.teamDark[i].color.copy(dark);
+    });
   }
 
   add(mesh, cast = false) {

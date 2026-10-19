@@ -7,18 +7,24 @@ import { BokehPass } from 'three/examples/jsm/postprocessing/BokehPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { Animator, Ease, lerp } from '../engine/anim.js';
+import { KID_SKY, buildKidScenery, makeGinghamTexture, makeGrassTexture } from './scenery.js';
 
-// Battle colour grade: desaturate, crush, vignette, film grain and a red impact flash.
+// Battle colour grade.
+//   amount: Action kill-cam — desaturate, crush, vignette, film grain.
+//   joy:    Kids battles — a little extra saturation and warmth with a soft, glowing warm edge.
+//   flash:  impact flash in flashTint (blood red in Action, a soft sunny white in Kids).
 const GradeShader = {
   uniforms: {
     tDiffuse: { value: null },
     amount: { value: 0 },
+    joy: { value: 0 },
     flash: { value: 0 },
+    flashTint: { value: new THREE.Color(0.55, 0.0, 0.02) },
     time: { value: 0 },
   },
   vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
   fragmentShader: `
-    uniform sampler2D tDiffuse; uniform float amount; uniform float flash; uniform float time; varying vec2 vUv;
+    uniform sampler2D tDiffuse; uniform float amount; uniform float joy; uniform float flash; uniform vec3 flashTint; uniform float time; varying vec2 vUv;
     void main() {
       vec4 c = texture2D(tDiffuse, vUv);
       vec3 col = c.rgb;
@@ -29,15 +35,59 @@ const GradeShader = {
       vec2 d = (vUv - 0.5) * vec2(1.0, 0.85);
       float v = smoothstep(0.78, 0.18, length(d));
       col *= mix(1.0, 0.25 + 0.75 * v, amount);
-      col = mix(col, vec3(0.55, 0.0, 0.02) + col * 0.5, clamp(flash, 0.0, 1.0) * 0.55);
+      // cheerful kids grade
+      float lj = dot(col, vec3(0.2126, 0.7152, 0.0722));
+      col = mix(vec3(lj), col, 1.0 + 0.22 * joy);
+      col *= mix(vec3(1.0), vec3(1.04, 1.01, 0.96), joy);
+      float edge = smoothstep(0.32, 0.8, length(d));
+      col = mix(col, col * vec3(1.02, 0.95, 0.9) + vec3(0.09, 0.06, 0.07), edge * 0.6 * joy);
+      col = mix(col, flashTint + col * 0.5, clamp(flash, 0.0, 1.0) * 0.55);
       float n = fract(sin(dot(vUv * vec2(1931.7, 1733.3) + time, vec2(12.9898, 78.233))) * 43758.5453);
       col += (n - 0.5) * 0.045 * amount;
       gl_FragColor = vec4(max(col, vec3(0.0)), c.a);
     }`,
 };
 
+// Scene look per game mode. Action: dusky, moody arena. Kids: a sunny picnic in the park.
+const THEMES = {
+  action: {
+    toneMapping: THREE.ACESFilmicToneMapping,
+    exposure: 0.98,
+    fog: 0x1b2440,
+    fogRange: [1.1, 2.6],
+    hemiSky: 0xcfe3ff,
+    hemiGround: 0x3a2a1a,
+    hemi: 1.25,
+    sunColor: 0xfff1dc,
+    sun: 2.6,
+    rimColor: 0x8fb4ff,
+    rim: 0.7,
+    env: 0.18,
+    shadowRadius: 1,
+    shadowIntensity: 1,
+    flashTint: new THREE.Color(0.55, 0.0, 0.02),
+  },
+  kids: {
+    toneMapping: THREE.NeutralToneMapping,
+    exposure: 0.92,
+    fog: KID_SKY.fog,
+    fogRange: [1.1, 2.6],
+    hemiSky: 0xeaf6ff,
+    hemiGround: 0xc4e8a6,
+    hemi: 1.55,
+    sunColor: 0xfff0d4,
+    sun: 2.3,
+    rimColor: 0xffd6ea,
+    rim: 0.55,
+    env: 0.32,
+    shadowRadius: 3.5,
+    shadowIntensity: 0.62,
+    flashTint: new THREE.Color(1.0, 0.94, 0.78),
+  },
+};
+
 export class World {
-  constructor(container) {
+  constructor(container, theme = 'action') {
     this.container = container;
     this.anim = new Animator();
 
@@ -53,7 +103,8 @@ export class World {
     this.renderer = renderer;
 
     const scene = new THREE.Scene();
-    scene.background = makeSkyTexture();
+    this.skyTexture = makeSkyTexture();
+    scene.background = this.skyTexture;
     scene.fog = new THREE.Fog(0x1b2440, 38, 80);
     const pmrem = new THREE.PMREMGenerator(renderer);
     scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
@@ -91,9 +142,13 @@ export class World {
     // Cinematic state: slow motion, post-processing strength, battle lighting mood and impact flash.
     this.slow = { target: 1, hold: 0 };
     this.post = { amount: 0, target: 0 };
+    this.joy = { amount: 0, target: 0 };
     this.mood = { value: 0, target: 0, center: new THREE.Vector3() };
     this.flashLevel = 0;
     this.baseFov = this.camera.fov;
+    this.theme = 'action';
+    this.look = THEMES.action;
+    this.setTheme(theme);
 
     this.timer = new THREE.Timer();
     this.timer.connect(document);
@@ -155,6 +210,7 @@ export class World {
     ground.position.y = -0.62;
     ground.receiveShadow = true;
     this.scene.add(ground);
+    this.ground = ground;
 
     // Big stone table the board rests on.
     const table = new THREE.Mesh(
@@ -164,6 +220,50 @@ export class World {
     table.position.y = -0.62 + 0.3;
     table.receiveShadow = true;
     this.scene.add(table);
+    this.table = table;
+    this.groundMats = { action: { ground: mat, table: table.material }, kids: null };
+  }
+
+  // Kids-mode meadow, picnic cloth and sky are only built the first time they're needed.
+  kidGround() {
+    if (!this.groundMats.kids) {
+      const grass = new THREE.MeshStandardMaterial({ color: 0xffffff, map: makeGrassTexture(), roughness: 1 });
+      const side = new THREE.MeshStandardMaterial({ color: 0xffe3ea, roughness: 0.9 });
+      const cloth = new THREE.MeshStandardMaterial({ color: 0xffffff, map: makeGinghamTexture(), roughness: 0.95 });
+      // CylinderGeometry groups: side, top cap, bottom cap
+      this.groundMats.kids = { ground: grass, table: [side, cloth, side] };
+      this.kidScenery = buildKidScenery();
+      this.scene.add(this.kidScenery);
+      this.onFrame((dt) => this.kidScenery.visible && this.kidScenery.userData.update(dt));
+    }
+    return this.groundMats.kids;
+  }
+
+  // Switch the whole scene look between 'action' (dusky arena) and 'kids' (sunny picnic).
+  setTheme(theme) {
+    const kids = theme === 'kids';
+    this.theme = kids ? 'kids' : 'action';
+    const look = THEMES[this.theme];
+    this.look = look;
+    const mats = kids ? this.kidGround() : this.groundMats.action;
+    this.ground.material = mats.ground;
+    this.table.material = mats.table;
+    // the meadow reaches out to the hills on the horizon
+    this.ground.scale.setScalar(kids ? 110 / 70 : 1);
+    if (this.kidScenery) this.kidScenery.visible = kids;
+    this.scene.background = kids ? new THREE.Color(KID_SKY.horizon) : this.skyTexture;
+    this.scene.fog.color.setHex(look.fog);
+    this.renderer.toneMapping = look.toneMapping;
+    this.renderer.toneMappingExposure = look.exposure;
+    this.hemi.color.setHex(look.hemiSky);
+    this.hemi.groundColor.setHex(look.hemiGround);
+    this.sun.color.setHex(look.sunColor);
+    this.rim.color.setHex(look.rimColor);
+    this.sun.shadow.radius = look.shadowRadius;
+    this.sun.shadow.intensity = look.shadowIntensity;
+    this.grade.uniforms.flashTint.value.copy(look.flashTint);
+    this.computeHomeView();
+    this.updateLook(0);
   }
 
   setupPost() {
@@ -178,11 +278,13 @@ export class World {
   }
 
   // Cinematic mode on/off: letterbox, colour grade, depth of field and battle lighting.
-  // look 'action' = grim grade, depth of field, dark battle lighting; 'kids' keeps the bright normal look.
+  // look 'action' = grim grade, depth of field, dark battle lighting and letterbox;
+  // look 'kids' keeps the sunny lighting and only adds a gentle, cheerful grade.
   setCinematicLook(on, center = null, look = 'action') {
     const grim = on && look === 'action';
     this.post.target = grim ? 1 : 0;
     this.mood.target = grim ? 1 : 0;
+    this.joy.target = on && look === 'kids' ? 1 : 0;
     if (center) this.mood.center.copy(center);
     document.body.classList.toggle('letterbox', grim);
   }
@@ -225,8 +327,9 @@ export class World {
     const elev = THREE.MathUtils.degToRad(this.camera.aspect < 0.8 ? 62 : 55);
     this.homeView.pos.set(0, Math.sin(elev) * dist, Math.cos(elev) * dist).add(this.homeView.target);
     this.controls.maxDistance = Math.max(45, dist * 1.4);
-    this.scene.fog.near = dist * 1.1;
-    this.scene.fog.far = dist * 2.6;
+    const [near, far] = this.look?.fogRange ?? THEMES.action.fogRange;
+    this.scene.fog.near = dist * near;
+    this.scene.fog.far = dist * far;
     this.camera.far = Math.max(200, dist * 4);
     this.camera.updateProjectionMatrix();
   }
@@ -353,7 +456,8 @@ export class World {
       this.shakeOffset.z += Math.cos(t * 1.1) * d;
     }
     this.camera.position.add(this.shakeOffset);
-    if (this.post.amount > 0.01) {
+    if (this.post.amount > 0.01 || this.joy.amount > 0.01) {
+      this.bokeh.enabled = this.post.amount > 0.01;
       this.bokeh.uniforms.focus.value = this.camera.position.distanceTo(this.controls.target);
       this.composer.render(rdt);
     } else {
@@ -365,8 +469,11 @@ export class World {
     const ease = (v, t, r) => lerp(v, t, 1 - Math.exp(-rdt * r));
     this.post.amount = ease(this.post.amount, this.post.target, 3);
     if (this.post.target === 0 && this.post.amount < 0.01) this.post.amount = 0;
+    this.joy.amount = ease(this.joy.amount, this.joy.target, 3);
+    if (this.joy.target === 0 && this.joy.amount < 0.01) this.joy.amount = 0;
     this.flashLevel = Math.max(0, this.flashLevel - rdt * 2.2);
     this.grade.uniforms.amount.value = this.post.amount;
+    this.grade.uniforms.joy.value = this.joy.amount;
     this.grade.uniforms.flash.value = this.flashLevel;
     this.grade.uniforms.time.value = (this.grade.uniforms.time.value + rdt) % 100;
     // shallow depth of field only on close shots
@@ -376,10 +483,11 @@ export class World {
     const m = this.mood;
     m.value = ease(m.value, m.target, 2.5);
     const k = m.value;
-    this.hemi.intensity = lerp(1.25, 0.35, k);
-    this.sun.intensity = lerp(2.6, 0.9, k);
-    this.rim.intensity = lerp(0.7, 0.2, k);
-    this.scene.environmentIntensity = lerp(0.18, 0.1, k);
+    const look = this.look;
+    this.hemi.intensity = lerp(look.hemi, 0.35, k);
+    this.sun.intensity = lerp(look.sun, 0.9, k);
+    this.rim.intensity = lerp(look.rim, 0.2, k);
+    this.scene.environmentIntensity = lerp(look.env, 0.1, k);
     const on = k > 0.01;
     this.battleKey.visible = on;
     this.battleRed.visible = on;
