@@ -6,10 +6,12 @@ import { getGlowTexture } from './effects.js';
 const R = 0.46;
 const H = 1.12;
 
-function buildCageGeometry() {
+// kids = a chunky, rounded toy playpen: fewer, thicker bars and a big bobble on top instead of a hook.
+function buildCageGeometry(kids = false) {
   const parts = [];
+  const seg = kids ? 10 : 6;
   const ring = (y, tube = 0.03) => {
-    const g = new THREE.TorusGeometry(R, tube, 6, 36);
+    const g = new THREE.TorusGeometry(R, kids ? tube * 1.5 : tube, seg, 36);
     g.rotateX(Math.PI / 2);
     g.translate(0, y, 0);
     parts.push(g);
@@ -17,31 +19,35 @@ function buildCageGeometry() {
   ring(0.04, 0.04);
   ring(0.55, 0.022);
   ring(H, 0.032);
-  const bars = 14;
+  const bars = kids ? 10 : 14;
+  const barR = kids ? 0.032 : 0.018;
   for (let i = 0; i < bars; i++) {
     const a = (i / bars) * Math.PI * 2;
     // leave a gap at the front for the padlock
-    const g = new THREE.CylinderGeometry(0.018, 0.018, H, 6);
+    const g = new THREE.CylinderGeometry(barR, barR, H, seg);
     g.translate(Math.sin(a) * R, H / 2, Math.cos(a) * R);
     parts.push(g);
   }
   for (const rot of [0, Math.PI / 2]) {
-    const g = new THREE.TorusGeometry(R, 0.022, 6, 24, Math.PI);
+    const g = new THREE.TorusGeometry(R, kids ? 0.034 : 0.022, seg, 24, Math.PI);
     g.scale(1, 0.55, 1);
     g.rotateY(rot);
     g.translate(0, H, 0);
     parts.push(g);
   }
-  const knob = new THREE.SphereGeometry(0.06, 10, 8);
-  knob.translate(0, H + R * 0.55 + 0.03, 0);
+  const knob = new THREE.SphereGeometry(kids ? 0.11 : 0.06, kids ? 16 : 10, kids ? 12 : 8);
+  knob.translate(0, H + R * 0.55 + (kids ? 0.07 : 0.03), 0);
   parts.push(knob);
-  const hook = new THREE.TorusGeometry(0.06, 0.015, 6, 16);
-  hook.translate(0, H + R * 0.55 + 0.12, 0);
-  parts.push(hook);
+  if (!kids) {
+    const hook = new THREE.TorusGeometry(0.06, 0.015, 6, 16);
+    hook.translate(0, H + R * 0.55 + 0.12, 0);
+    parts.push(hook);
+  }
   return mergeGeometries(parts.map((g) => g.toNonIndexed()));
 }
 
-let cageGeo = null;
+const cageGeos = {};
+const cageGeometry = (kids) => (cageGeos[kids ? 'kids' : 'action'] ??= buildCageGeometry(kids));
 const ironMat = new THREE.MeshStandardMaterial({ color: 0x3f4550, metalness: 0.85, roughness: 0.38 });
 const goldMat = new THREE.MeshStandardMaterial({ color: 0xffc23a, metalness: 0.9, roughness: 0.25, emissive: 0x2a1800 });
 const darkMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.5 });
@@ -66,14 +72,24 @@ function buildPadlock() {
 }
 
 export class Cage {
-  constructor(scene, pos, teamHex) {
-    cageGeo ??= buildCageGeometry();
+  // style 'kids' makes a glossy pastel playpen in the team colour instead of dark iron.
+  constructor(scene, pos, teamHex, style = 'action') {
+    const kids = style === 'kids';
+    this.kids = kids;
+    this.teamHex = teamHex;
     this.scene = scene;
     this.group = new THREE.Group();
     this.group.position.copy(pos);
     this.mat = ironMat.clone();
-    this.mat.color.lerp(new THREE.Color(teamHex), 0.18);
-    this.bars = new THREE.Mesh(cageGeo, this.mat);
+    if (kids) {
+      this.mat.color.set(0xffffff).lerp(new THREE.Color(teamHex), 0.55);
+      this.mat.metalness = 0.05;
+      this.mat.roughness = 0.3;
+      this.mat.emissive.set(teamHex).multiplyScalar(0.08);
+    } else {
+      this.mat.color.lerp(new THREE.Color(teamHex), 0.18);
+    }
+    this.bars = new THREE.Mesh(cageGeometry(kids), this.mat);
     this.bars.castShadow = true;
     this.group.add(this.bars);
     this.lock = buildPadlock();
@@ -115,7 +131,7 @@ export class Cage {
       this.lock.rotation.x = k * 1.6;
       this.lock.scale.setScalar(1 - k);
     }, Ease.inQuad);
-    sfx?.play('creak');
+    sfx?.play(this.kids ? 'bubble' : 'creak');
     this.mat.transparent = true;
     await anim.tween(0.6, (k) => {
       this.group.position.y = this.home.y + Ease.inQuad(k) * 2.4;
@@ -139,9 +155,21 @@ export class Cage {
     }, Ease.inQuad);
     this.mat.transparent = false;
     this.mat.opacity = 1;
-    sfx?.play('clank');
-    fx?.dust(this.home.clone().setY(this.home.y + 0.05), 12, 0xb8b2a6);
-    await anim.tween(0.2, (k) => (this.group.scale.y = 1 - Math.sin(k * Math.PI) * 0.12));
+    if (this.kids) {
+      // lands with a springy boing and a puff of sparkles
+      sfx?.play('boing');
+      fx?.dust(this.home.clone().setY(this.home.y + 0.05), 9, 0xfff4e0);
+      fx?.sparks(this.home.clone().setY(this.home.y + 0.6), this.teamHex, 12, 2);
+      await anim.tween(0.36, (k) => {
+        const s = Math.sin(k * Math.PI * 2) * (1 - k);
+        this.group.scale.set(1 + s * 0.1, 1 - s * 0.2, 1 + s * 0.1);
+      });
+      this.group.scale.setScalar(1);
+    } else {
+      sfx?.play('clank');
+      fx?.dust(this.home.clone().setY(this.home.y + 0.05), 12, 0xb8b2a6);
+      await anim.tween(0.2, (k) => (this.group.scale.y = 1 - Math.sin(k * Math.PI) * 0.12));
+    }
     this.lock.visible = true;
     const shackle = this.lock.userData.shackle;
     shackle.position.y = 0.15;

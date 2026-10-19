@@ -4,12 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#0d1230" />
-    <meta name="description" content="Action Ludo — 3D Ludo where every capture is a brutal, cinematic animal kill." />
+    <meta name="description" content="Action Ludo — 3D Ludo where every capture is a cinematic animal battle. Brutal in Action mode, cute and bloodless in Kids mode." />
     <title>Action Ludo</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎲</text></svg>" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Anton&family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@500;600;700;800&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Anton&family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@500;600;700;800&family=Fredoka:wght@400;500;600;700&display=swap" rel="stylesheet" />
   </head>
   <body>
     <div id="stage"></div>
@@ -17,24 +17,46 @@
     <!-- Setup -->
     <div id="setup" class="overlay">
       <div class="card setup-card">
-        <h1 class="logo">ACTION <span>LUDO</span></h1>
-        <p class="tagline">Classic Ludo rules. Apex predators. Every capture is a fight to the death — then the carcass is chained and dragged back to its cage.</p>
+        <h1 class="logo only-action">ACTION <span>LUDO</span></h1>
+        <h1 class="kid-logo only-kids" aria-label="Action Ludo">
+          <span class="word"><i>A</i><i>C</i><i>T</i><i>I</i><i>O</i><i>N</i></span>
+          <span class="word"><i>L</i><i>U</i><i>D</i><i>O</i></span>
+          <span class="kid-badge">🧸 Kids</span>
+        </h1>
+        <div id="mode-switch" class="mode-switch" role="radiogroup" aria-label="Game mode">
+          <button type="button" role="radio" data-mode="action" aria-checked="true">
+            <span class="ico">⚔</span><span class="txt"><b>Action</b><small>Kill-cam battles</small></span>
+          </button>
+          <button type="button" role="radio" data-mode="kids" aria-checked="false">
+            <span class="ico">🧸</span><span class="txt"><b>Kids</b><small>Cute &amp; bloodless</small></span>
+          </button>
+        </div>
+        <p class="tagline only-action">Classic Ludo rules. Apex predators. Every capture is a fight to the death — then the carcass is chained and dragged back to its cage.</p>
+        <p class="tagline only-kids">Roll the dice, race your animal pals home, and bonk your friends back to their cozy cages!</p>
         <div id="slots" class="slots"></div>
         <p id="setup-error" class="error"></p>
-        <label class="toggle"><input type="checkbox" id="opt-gore" checked /> <span>Blood &amp; gore</span></label>
+        <label class="toggle only-action"><input type="checkbox" id="opt-gore" checked /> <span>Blood &amp; gore</span></label>
         <div class="actions">
-          <button id="btn-start" class="btn primary">Start Game</button>
-          <button id="btn-arena" class="btn">⚔ Battle Arena</button>
+          <button id="btn-start" class="btn primary"><span class="only-action">Start Game</span><span class="only-kids">▶ Let's Play!</span></button>
+          <button id="btn-arena" class="btn"><span class="only-action">⚔ Battle Arena</span><span class="only-kids">🎪 Play Arena</span></button>
         </div>
         <details class="rules">
           <summary>How to play</summary>
-          <ul>
+          <ul class="only-action">
             <li>Every animal starts locked in a cage. Roll a <b>6</b> and a golden key unlocks a cage, releasing the animal onto your start square.</li>
             <li>Move clockwise around the board, then up your coloured home column to the centre. You need the exact roll to get home.</li>
             <li>Land on an opponent on a normal square and your animal attacks — the loser is torn apart, chained, and dragged back to its cage.</li>
             <li>Star squares and start squares are safe: no fighting there.</li>
             <li>Rolling a 6, capturing, or getting a piece home earns another roll. Three 6s in a row forfeits the turn.</li>
             <li>First to bring all four animals home wins. Click the hovering die (or press <kbd>Space</kbd>) to roll; drag to orbit the camera.</li>
+          </ul>
+          <ul class="only-kids">
+            <li>Your four animal pals start in their cozy cages. Roll a <b>6</b> and a magic golden key lets one out onto your start square. 🔑</li>
+            <li>Hop around the board, then up your own coloured path to the middle. You need the exact number to get home.</li>
+            <li>Land on a friend's square and your animal does its silly move — <b>bonk!</b> — and they float all the way back to their cozy cage. 🎈</li>
+            <li>Star squares ⭐ and start squares are safe spots: no bonking there.</li>
+            <li>Rolling a 6, bonking a friend, or getting home means you roll again! Three 6s in a row skips your turn.</li>
+            <li>First to get all four pals home wins! Tap the floating die (or press <kbd>Space</kbd>) to roll; drag to spin the board.</li>
           </ul>
         </details>
       </div>
@@ -43,16 +65,17 @@
     <!-- Arena -->
     <div id="arena" class="overlay hidden">
       <div class="card arena-card">
-        <h2 class="title">⚔ Battle Arena</h2>
-        <p class="tagline">Pick any matchup and watch the fight, the chains and the cage.</p>
+        <h2 class="title"><span class="only-action">⚔ Battle Arena</span><span class="only-kids">🎪 Play Arena</span></h2>
+        <p class="tagline only-action">Pick any matchup and watch the fight, the chains and the cage.</p>
+        <p class="tagline only-kids">Pick any two animal pals and watch their silliest move — then a float back to the cozy cage!</p>
         <div class="arena-cols">
           <div class="arena-side" id="arena-atk"></div>
           <div class="arena-vs">VS</div>
           <div class="arena-side" id="arena-vic"></div>
         </div>
         <div class="actions">
-          <button id="btn-fight" class="btn primary">Fight!</button>
-          <button id="btn-random" class="btn">🎲 Random fight</button>
+          <button id="btn-fight" class="btn primary"><span class="only-action">Fight!</span><span class="only-kids">▶ Let's Go!</span></button>
+          <button id="btn-random" class="btn"><span class="only-action">🎲 Random fight</span><span class="only-kids">🎲 Surprise me!</span></button>
           <button id="btn-arena-back" class="btn ghost">Back</button>
         </div>
       </div>
@@ -89,8 +112,10 @@
     <div id="toast" class="toast"></div>
 
     <div id="gameover" class="overlay hidden">
+      <div id="confetti" class="confetti only-kids" aria-hidden="true"></div>
       <div class="card gameover-card">
-        <h2 class="title">🏆 Game Over</h2>
+        <h2 class="title"><span class="only-action">🏆 Game Over</span><span class="only-kids">🎉 Hooray! 🎉</span></h2>
+        <p id="winner-line" class="winner-line only-kids"></p>
         <ol id="standings" class="standings"></ol>
         <div class="actions">
           <button id="btn-again" class="btn primary">Play Again</button>

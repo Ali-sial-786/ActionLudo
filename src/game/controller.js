@@ -41,6 +41,35 @@ function lerpAngle(a, b, t) {
 }
 
 const ORDINALS = ['1st', '2nd', '3rd', '4th'];
+// Kids-mode confetti / sparkle colours.
+const CANDY = [0xff6b8b, 0xffb84d, 0xffe066, 0x6fdc8c, 0x5ec8ff, 0xb49bff, 0xffffff];
+
+// Player-facing copy, Action vs Kids mode.
+const COPY = {
+  action: {
+    rolling: (who) => `${who} is rolling…`,
+    yourRoll: (who) => `${who}, roll the die! <kbd>Space</kbd>`,
+    forfeit: 'Three 6s in a row — turn forfeited!',
+    noMovesSix: 'No moves — but a 6 rolls again!',
+    noMoves: (roll) => `No moves with a ${roll}.`,
+    onlyMove: 'Only one move — moving.',
+    pick: (roll, animal) => `Rolled a ${roll}. Pick a glowing ${animal} to move.`,
+    finished: (who, place) => `${who} finishes ${place}!`,
+    bonus: (why) => `${why === 'capture' ? 'Capture bonus' : why === 'home' ? 'Made it home' : 'Rolled a 6'} — roll again!`,
+  },
+  kids: {
+    rolling: (who) => `${who} is rolling…`,
+    yourRoll: (who) => `${who}, your turn — tap the die! <kbd>Space</kbd>`,
+    forfeit: 'Oopsie! Three 6s in a row — turn skipped!',
+    noMovesSix: 'No hops this time — but a 6 rolls again!',
+    noMoves: (roll) => `No hops with a ${roll} — next friend's turn!`,
+    onlyMove: 'Only one way to go — hop hop!',
+    pick: (roll, animal) => `You rolled a ${roll}! Tap a bouncing ${animal} to hop.`,
+    finished: (who, place) => `${who} got everyone home — ${place} place! 🎉`,
+    bonus: (why) => (why === 'capture' ? 'Bonus roll for the bonk — go again! 🎲' : why === 'home' ? 'Home sweet home — roll again! 🏡' : 'A six! Roll again! 🎲'),
+  },
+};
+const copy = () => (isKids() ? COPY.kids : COPY.action);
 
 export class GameController {
   constructor({ world, board, fx, dice, sfx, hud }) {
@@ -87,7 +116,7 @@ export class GameController {
         view.player = player;
         this.world.scene.add(view.root);
         this.views.set(token.id, view);
-        const cage = new Cage(this.world.scene, yardSpot(player.seat, token.index), color.hex);
+        const cage = new Cage(this.world.scene, yardSpot(player.seat, token.index), color.hex, settings.mode);
         cage.setClosed(token.progress < 0);
         this.cages.set(token.id, cage);
       }
@@ -308,19 +337,22 @@ export class GameController {
 
   async loop(session) {
     const g = this.game;
+    const text = copy();
+    const kids = isKids();
     while (!g.over) {
       const player = currentPlayer(g);
       const color = COLORS[player.seat];
       const animal = animalById(player.animal);
+      const who = `${animal.emoji} ${player.name}`;
       this.hud.setTurn(g, player);
       await this.dice.present(player.seat, color.hex);
       if (!this.alive(session)) return;
 
       if (player.cpu) {
-        this.hud.setMessage(`${animal.emoji} ${player.name} is rolling…`);
+        this.hud.setMessage(text.rolling(who));
         await this.anim.wait(0.45);
       } else {
-        this.hud.setMessage(`${animal.emoji} ${player.name}, roll the die! <kbd>Space</kbd>`);
+        this.hud.setMessage(text.yourRoll(who));
         await this.waitForRoll();
         this.hud.enableRoll(false);
       }
@@ -332,7 +364,7 @@ export class GameController {
 
       if (registerRoll(g, roll).forfeit) {
         this.sfx.play('sad');
-        this.hud.toast('Three 6s in a row — turn forfeited!');
+        this.hud.toast(text.forfeit);
         await this.anim.wait(1.2);
         advanceTurn(g);
         continue;
@@ -340,7 +372,7 @@ export class GameController {
 
       const moves = legalMoves(g, player.seat, roll);
       if (!moves.length) {
-        this.hud.setMessage(roll === 6 ? 'No moves — but a 6 rolls again!' : `No moves with a ${roll}.`);
+        this.hud.setMessage(roll === 6 ? text.noMovesSix : text.noMoves(roll));
         await this.anim.wait(roll === 6 ? 0.8 : 1.0);
         if (!this.alive(session)) return;
         if (roll !== 6) advanceTurn(g);
@@ -353,11 +385,11 @@ export class GameController {
         await this.anim.wait(0.35);
         move = chooseMove(g, moves);
       } else if (distinct.length === 1) {
-        this.hud.setMessage(`Only one move — moving.`);
+        this.hud.setMessage(text.onlyMove);
         move = distinct[0];
         await this.anim.wait(0.35);
       } else {
-        this.hud.setMessage(`Rolled a ${roll}. Pick a glowing ${animal.name.toLowerCase()} to move.`);
+        this.hud.setMessage(text.pick(roll, animal.name.toLowerCase()));
         move = await this.waitForMove(moves);
       }
       if (!this.alive(session)) return;
@@ -369,20 +401,21 @@ export class GameController {
 
       if (result.playerFinished) {
         const place = g.standings.indexOf(player.seat);
-        this.sfx.play('fanfare');
-        this.hud.toast(`${animal.emoji} ${player.name} finishes ${ORDINALS[place]}!`);
+        this.sfx.play(kids ? 'tada' : 'fanfare');
+        if (kids) this.sfx.play('yay');
+        this.hud.toast(text.finished(who, ORDINALS[place]));
         await this.anim.wait(1.4);
       }
       if (g.over) break;
       if (result.bonus) {
-        const why = result.captured.length ? 'Capture bonus' : result.finishedToken ? 'Made it home' : 'Rolled a 6';
-        this.hud.toast(`${why} — roll again!`);
+        this.hud.toast(text.bonus(result.captured.length ? 'capture' : result.finishedToken ? 'home' : 'six'));
         continue;
       }
       advanceTurn(g);
     }
     if (!this.alive(session)) return;
     this.sfx.play('fanfare');
+    if (kids) this.sfx.play('yay');
     this.hud.showGameOver(g);
   }
 
@@ -417,10 +450,17 @@ export class GameController {
 
   async hopAlong(view, path) {
     if (!path.length) return;
+    const kids = isKids();
     const s0 = view.root.scale.x;
     if (Math.abs(s0 - 1) > 0.01) {
       await this.anim.tween(0.12, (k) => view.root.scale.setScalar(lerp(s0, 1, k)));
     }
+    // Kids hops are bouncier: higher arcs with squash & stretch.
+    const rest = view.model.userData.rest?.scale ?? new THREE.Vector3(1, 1, 1);
+    const squash = (sy) => {
+      const sxz = 1 / Math.sqrt(sy);
+      view.model.scale.set(rest.x * sxz, rest.y * sy, rest.z * sxz);
+    };
     for (let i = 0; i < path.length; i++) {
       const from = view.root.position.clone();
       const to = path[i];
@@ -429,18 +469,56 @@ export class GameController {
       this.sfx.play('hop', { step: i });
       await this.anim.tween(0.2, (k) => {
         view.root.position.lerpVectors(from, to, k);
-        view.root.position.y = BOARD_Y + arc(k, 0.3);
+        view.root.position.y = BOARD_Y + arc(k, kids ? 0.42 : 0.3);
         view.root.rotation.y = lerpAngle(r0, r1, Math.min(1, k * 3));
         view.model.rotation.x = Math.sin(k * Math.PI * 2) * -0.18;
+        if (kids) squash(0.86 + 0.26 * Math.sin(k * Math.PI));
       });
       view.model.rotation.x = 0;
+    }
+    if (kids) {
+      this.sfx.play('boing');
+      this.fx.dust(view.root.position.clone().setY(BOARD_Y + 0.03), 6, 0xfff4e0);
+      // springy landing wobble back to rest
+      await this.anim.tween(0.22, (k) => squash(1 - Math.sin(k * Math.PI * 2) * 0.14 * (1 - k)));
+      view.model.scale.copy(rest);
+      return;
     }
     this.sfx.play('land');
     this.fx.dust(view.root.position.clone().setY(BOARD_Y + 0.03), 6);
   }
 
+  // A burst of fluttering paper confetti (Kids mode).
+  confetti(pos, count = 30) {
+    this.fx.burst(pos, { count, colors: CANDY, shape: 'feather', speed: 2.6, up: 3.2, size: [0.025, 0.045], life: [1.4, 2.2] });
+  }
+
+  // Kids-mode happy dance: two bouncy hops with a twirl and a wiggle.
+  async happyDance(view, duration = 0.9) {
+    view.resetPose();
+    const head = view.parts.head;
+    const ry0 = view.model.rotation.y;
+    await this.anim.tween(duration, (k) => {
+      view.model.position.y = 0.07 + arc((k * 2) % 1, 0.24);
+      view.model.rotation.y = ry0 + Ease.inOutCubic(k) * Math.PI * 2;
+      view.model.rotation.z = Math.sin(k * Math.PI * 4) * 0.14;
+      if (head) head.rotation.z = Math.sin(k * Math.PI * 6) * 0.25;
+      if (view.parts.setWings) view.parts.setWings(Math.sin(k * Math.PI), 0.4 * Math.sin(k * Math.PI * 6));
+      if (view.parts.tail?.rotation) view.parts.tail.rotation.y = Math.sin(k * Math.PI * 8) * 0.5;
+    });
+    view.resetPose();
+  }
+
   async celebrateHome(view) {
     const p = view.root.position.clone();
+    if (isKids()) {
+      this.sfx.play('tada');
+      this.sfx.play('cheer');
+      this.fx.ring(p, { color: COLORS[view.token.seat].hex, from: 0.2, to: 1.4, duration: 0.8, opacity: 0.8 });
+      this.confetti(p.clone().setY(BOARD_Y + 0.5), 34);
+      await this.happyDance(view, 0.8);
+      return;
+    }
     this.sfx.play('roar', { pitch: 1.1 });
     this.sfx.play('cheer');
     this.fx.ring(p, { color: COLORS[view.token.seat].hex, from: 0.2, to: 1.4, duration: 0.8, opacity: 0.8 });
@@ -479,7 +557,8 @@ export class GameController {
     const s0 = view.root.scale.x;
     const r0 = view.root.rotation.y;
     const r1 = Math.atan2(start.x - from.x, start.z - from.z);
-    this.sfx.play('roar', { pitch: 1.2 });
+    const kids = isKids();
+    this.sfx.play(kids ? 'yay' : 'roar', { pitch: 1.2 });
     await this.anim.tween(0.25, (k) => {
       view.root.rotation.y = lerpAngle(r0, r1, k);
       view.model.position.y = 0.07 - 0.05 * k;
@@ -496,8 +575,14 @@ export class GameController {
     });
     view.model.rotation.x = 0;
     view.model.position.y = 0.07;
-    this.sfx.play('land');
-    this.fx.dust(start.clone().setY(BOARD_Y + 0.03), 12);
+    if (kids) {
+      this.sfx.play('boing');
+      this.fx.dust(start.clone().setY(BOARD_Y + 0.03), 10, 0xfff4e0);
+      this.confetti(start.clone().setY(BOARD_Y + 0.35), 18);
+    } else {
+      this.sfx.play('land');
+      this.fx.dust(start.clone().setY(BOARD_Y + 0.03), 12);
+    }
     this.fx.sparks(start.clone().setY(BOARD_Y + 0.3), COLORS[token.seat].hex, 14, 2.5);
     await camMove;
     this.world.cinematic = false;
@@ -548,6 +633,7 @@ export class GameController {
         vic.root.rotation.y = lerpAngle(vr0, faceV, k);
       }),
     ]);
+    let titled = false;
     const ctx = makeContext({
       world: this.world,
       fx: this.fx,
@@ -558,7 +644,10 @@ export class GameController {
       A,
       V,
       director: D,
-      onKill: () => this.hud.killTitle(atkPlayer, vicPlayer),
+      onKill: () => {
+        titled = true;
+        this.hud.killTitle(atkPlayer, vicPlayer);
+      },
     });
     // team bases tuck away for the fight; the attacker's reappears under it on the victim's square
     this.anim.tween(0.2, (k) => {
@@ -567,6 +656,8 @@ export class GameController {
     });
     await (kids ? kidVictimReacts : victimReacts)(ctx);
     await (kids ? KID_ATTACKS : ATTACKS)[atk.animal](ctx);
+    // every kids romp gets its title card, even if the choreography never called onKill
+    if (kids && !titled) ctx.onKill();
 
     // Re-root the attacker on the victim's square without a visual jump.
     const mw = new THREE.Vector3();
@@ -622,21 +713,49 @@ export class GameController {
     this.world.cinematic = false;
   }
 
-  // Kids mode: a happy hop from the winner, then the loser floats back home and the cage closes.
+  // Kids mode: the winner does a happy dance in a shower of confetti, the loser floats back home
+  // (camera tracking it), the cage boings shut around it and the camera returns to the board.
   async kidAftermath(atk, vic, V, camSaved) {
-    atk.resetPose();
-    await this.anim.tween(0.5, (k) => (atk.model.position.y = 0.07 + arc(k, 0.3)));
-    atk.idle = true;
+    const D = this.director;
     const { token } = vic;
+    const cage = this.cages.get(token.id);
     const spot = yardSpot(token.seat, token.index);
+
+    // settle the winner back onto the square if the move ended mid-air
+    const y0 = atk.model.position.y;
+    if (y0 > 0.08) await this.anim.tween(0.3, (k) => (atk.model.position.y = lerp(y0, 0.07, Ease.outBounce(k))));
+    D.move({ at: V, yaw: 18, pitch: 16, dist: 2.1, lift: 0.35, fov: 36 }, 0.5);
+    this.sfx.play('yay');
+    this.confetti(V.clone().setY(BOARD_Y + 0.7), 36);
+    this.fx.ring(V, { color: COLORS[atk.token.seat].hex, from: 0.2, to: 1.3, duration: 0.7, opacity: 0.7 });
+    await this.happyDance(atk);
+    atk.idle = true;
+
+    // the loser floats home; keep both it and its cage in frame
+    this.hud.toast('Bonk! Back to the cage! 🎈');
+    const shot = () => {
+      const b = vic.root.position.clone();
+      const center = b.clone().add(spot).multiplyScalar(0.5);
+      center.y = BOARD_Y + 0.3 + Math.max(0, b.y - BOARD_Y) * 0.4;
+      return this.world.frameView(center, Math.max(1.7, b.distanceTo(spot) * 0.5 + 1.0), 46);
+    };
+    const stopTracking = this.anim.every((dt) => this.world.follow(shot(), dt, 3));
+    this.fx.ring(spot, { color: COLORS[token.seat].hex, from: 0.2, to: 1.1, duration: 0.6 });
     await kidFloatHome({ world: this.world, anim: this.anim, fx: this.fx, sfx: this.sfx, vic, spot });
+    stopTracking();
+
+    // safe and sound in the yard, good as new
+    vic.root.position.copy(spot);
     vic.root.rotation.set(0, 0, 0);
     vic.root.scale.setScalar(YARD_SCALE);
     vic.restoreMaterials();
     vic.resetPose();
     vic.base.visible = true;
-    vic.base.scale.setScalar(1);
-    await this.cages.get(token.id).close(this.anim, this.sfx, this.fx);
+    vic.base.scale.setScalar(0.01);
+    this.anim.tween(0.25, (k) => vic.base.scale.setScalar(k), Ease.outBack);
+    await cage.close(this.anim, this.sfx, this.fx);
+    this.sfx.play('giggle');
+    await this.anim.wait(0.2);
     await this.restoreCamera(camSaved, 0.8);
   }
 

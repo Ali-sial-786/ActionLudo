@@ -24,25 +24,28 @@ const PIPS = {
   6: [[0, 0], [2, 0], [0, 1], [2, 1], [0, 2], [2, 2]],
 };
 
-function faceTexture(value) {
+// Kids-mode die: candy-coloured pips, a different colour on every face.
+const KID_PIP_COLORS = { 1: '#ff4f86', 2: '#ff9a1f', 3: '#2fbf63', 4: '#2f8cff', 5: '#9b5cff', 6: '#ff4747' };
+
+function faceTexture(value, kids = false) {
   const c = document.createElement('canvas');
   c.width = c.height = 256;
   const g = c.getContext('2d');
   const grad = g.createRadialGradient(128, 110, 20, 128, 128, 190);
   grad.addColorStop(0, '#ffffff');
-  grad.addColorStop(1, '#e9e4da');
+  grad.addColorStop(1, kids ? '#fff1dc' : '#e9e4da');
   g.fillStyle = grad;
   g.fillRect(0, 0, 256, 256);
   for (const [x, y] of PIPS[value]) {
     const cx = 64 + x * 64;
     const cy = 64 + y * 64;
     g.beginPath();
-    g.arc(cx, cy, value === 1 ? 30 : 22, 0, Math.PI * 2);
-    g.fillStyle = value === 1 ? '#d32f2f' : '#1b1b1b';
+    g.arc(cx, cy, kids ? (value === 1 ? 36 : 25) : value === 1 ? 30 : 22, 0, Math.PI * 2);
+    g.fillStyle = kids ? KID_PIP_COLORS[value] : value === 1 ? '#d32f2f' : '#1b1b1b';
     g.fill();
     g.beginPath();
-    g.arc(cx - 5, cy - 6, 6, 0, Math.PI * 2);
-    g.fillStyle = 'rgba(255,255,255,0.25)';
+    g.arc(cx - 6, cy - 7, kids ? 8 : 6, 0, Math.PI * 2);
+    g.fillStyle = kids ? 'rgba(255,255,255,0.45)' : 'rgba(255,255,255,0.25)';
     g.fill();
   }
   const tex = new THREE.CanvasTexture(c);
@@ -51,15 +54,18 @@ function faceTexture(value) {
   return tex;
 }
 
+const faceMaterials = (kids) =>
+  FACE_VALUES.map((v) => new THREE.MeshStandardMaterial({ map: faceTexture(v, kids), roughness: kids ? 0.3 : 0.35, metalness: 0.0 }));
+
 export class Dice {
-  constructor(world, fx, sfx) {
+  constructor(world, fx, sfx, theme = 'action') {
     this.world = world;
     this.anim = world.anim;
     this.fx = fx;
     this.sfx = sfx;
     const geo = new RoundedBoxGeometry(SIZE, SIZE, SIZE, 4, 0.1);
-    const mats = FACE_VALUES.map((v) => new THREE.MeshStandardMaterial({ map: faceTexture(v), roughness: 0.35, metalness: 0.0 }));
-    this.mesh = new THREE.Mesh(geo, mats);
+    this.faceMats = { action: faceMaterials(false), kids: null };
+    this.mesh = new THREE.Mesh(geo, this.faceMats.action);
     this.mesh.castShadow = true;
     this.mesh.receiveShadow = true;
     world.scene.add(this.mesh);
@@ -86,6 +92,16 @@ export class Dice {
       const s = 1 + Math.sin(time * 5) * 0.08;
       this.glow.scale.set(s, s, s);
     });
+    this.setTheme(theme);
+  }
+
+  setTheme(theme) {
+    const kids = theme === 'kids';
+    if (kids) this.faceMats.kids ??= faceMaterials(true);
+    this.mesh.material = kids ? this.faceMats.kids : this.faceMats.action;
+    // a slightly chunkier, toy-like die for little hands
+    this.mesh.scale.setScalar(kids ? 1.12 : 1);
+    this.theme = kids ? 'kids' : 'action';
   }
 
   hide() {
@@ -95,7 +111,7 @@ export class Dice {
   }
 
   restPosition(seat) {
-    return yardCenter(seat).setY(BOARD_Y + SIZE / 2);
+    return yardCenter(seat).setY(BOARD_Y + (SIZE * this.mesh.scale.y) / 2);
   }
 
   // Float the die above the given player's yard, waiting to be rolled.

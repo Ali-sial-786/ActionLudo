@@ -7,21 +7,32 @@ import { GameController } from './game/controller.js';
 import { Hud } from './ui/hud.js';
 import { sfx } from './engine/audio.js';
 import { goreSettings } from './render/gore.js';
-import { settings } from './settings.js';
+import { initialMode, normalizeMode, saveMode, settings } from './settings.js';
 
-// Game mode: ?mode=kids in the URL, else the last choice saved in this browser.
-try {
-  const fromUrl = new URLSearchParams(location.search).get('mode');
-  const saved = localStorage.getItem('action-ludo-mode');
-  settings.mode = fromUrl === 'kids' || (!fromUrl && saved === 'kids') ? 'kids' : 'action';
-} catch {
-  /* storage unavailable */
+const storage = (() => {
+  try {
+    return window.localStorage;
+  } catch {
+    return null; // storage unavailable
+  }
+})();
+
+// Game mode: ?mode=kids|action in the URL, else the last choice saved in this browser.
+settings.mode = initialMode(location.search, storage);
+// Theme the page before anything renders so there is no flash of the wrong look.
+applyPageTheme(settings.mode);
+
+function applyPageTheme(mode) {
+  const kids = mode === 'kids';
+  document.body.classList.toggle('kids', kids);
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', kids ? '#8fd6ff' : '#0d1230');
+  document.title = kids ? 'Action Ludo — Kids' : 'Action Ludo';
 }
 
-const world = new World(document.getElementById('stage'));
-const board = new BoardView(world.scene);
+const world = new World(document.getElementById('stage'), settings.mode);
+const board = new BoardView(world.scene, settings.mode);
 const fx = new Effects(world);
-const dice = new Dice(world, fx, sfx);
+const dice = new Dice(world, fx, sfx, settings.mode);
 
 const SPEEDS = [1, 2, 3];
 let speedIndex = 0;
@@ -74,9 +85,44 @@ const hud = new Hud({
   },
   onMenu: () => toMenu(),
   onGore: (on) => (goreSettings.enabled = on && settings.mode !== 'kids'),
+  onMode: (mode) => {
+    sfx.unlock();
+    if (normalizeMode(mode) === settings.mode) return;
+    setMode(mode);
+    sfx.play(settings.mode === 'kids' ? 'boing' : 'click');
+  },
 });
 
 controller = new GameController({ world, board, fx, dice, sfx, hud });
+
+// Switch between Action and Kids mode from the menu: re-theme the page and the 3D scene,
+// re-render the menu copy and rebuild the preview pieces with the matching animal style.
+function setMode(mode) {
+  settings.mode = normalizeMode(mode);
+  saveMode(settings.mode, storage);
+  // Keep a ?mode= link in sync so a reload doesn't flip back.
+  try {
+    const url = new URL(location.href);
+    if (url.searchParams.has('mode')) {
+      url.searchParams.set('mode', settings.mode);
+      history.replaceState(null, '', url);
+    }
+  } catch {
+    /* history unavailable */
+  }
+  applyMode();
+  controller.preview(hud.players());
+}
+
+function applyMode() {
+  const { mode } = settings;
+  applyPageTheme(mode);
+  goreSettings.enabled = mode !== 'kids' && hud.goreChecked();
+  world.setTheme(mode);
+  board.setTheme(mode);
+  dice.setTheme(mode);
+  hud.setMode(mode);
+}
 
 function toMenu() {
   controller.abort();
@@ -111,9 +157,10 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
+applyMode();
 controller.preview(hud.players());
 world.idleOrbit = true;
 hud.showSetup();
 
 // Handy for debugging from the console.
-window.actionLudo = { world, controller, hud, sfx };
+window.actionLudo = { world, controller, hud, sfx, settings, setMode };

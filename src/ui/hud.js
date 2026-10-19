@@ -1,4 +1,5 @@
-import { ANIMALS, COLORS, animalById } from '../config.js';
+import { ANIMALS, COLORS, animalById, blurbOf, moveOf, verbOf } from '../config.js';
+import { isKids } from '../settings.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -17,6 +18,9 @@ function el(tag, props = {}, children = []) {
 
 const DEFAULT_ANIMALS = ['eagle', 'tiger', 'shark', 'gorilla'];
 const MEDALS = ['🥇', '🥈', '🥉', '🏳️'];
+const KID_MEDALS = ['🥇', '🥈', '🥉', '🌟'];
+const medals = () => (isKids() ? KID_MEDALS : MEDALS);
+const CONFETTI_COLORS = ['#ff6b8b', '#ffb84d', '#ffe066', '#6fdc8c', '#5ec8ff', '#b49bff'];
 const STORAGE_KEY = 'action-ludo-setup-v1';
 
 function loadSaved() {
@@ -74,6 +78,7 @@ export class Hud {
   }
 
   renderSlots() {
+    const kids = isKids();
     const root = $('slots');
     root.innerHTML = '';
     this.slots.forEach((slot) => {
@@ -113,7 +118,7 @@ export class Hud {
         ANIMALS.map((a) =>
           el('button', {
             className: `animal ${a.id === slot.animal ? 'on' : ''}`,
-            title: `${a.name} — ${a.move}`,
+            title: `${a.name} — ${moveOf(a, kids)}`,
             html: `<span>${a.emoji}</span><small>${a.name}</small>`,
             onclick: () => {
               slot.animal = a.id;
@@ -123,13 +128,30 @@ export class Hud {
         ),
       );
       card.append(grid);
-      card.append(el('div', { className: 'animal-info', html: `<b>${animal.move}</b> — ${animal.blurb}` }));
+      card.append(el('div', { className: 'animal-info', html: `<b>${moveOf(animal, kids)}</b> — ${blurbOf(animal, kids)}` }));
       root.append(card);
     });
     const active = this.slots.filter((s) => s.mode !== 'off').length;
     const humans = this.slots.filter((s) => s.mode === 'human').length;
     $('btn-start').disabled = active < 2;
-    $('setup-error').textContent = active < 2 ? 'Turn on at least two players.' : humans === 0 ? 'All CPU — sit back and watch the carnage.' : '';
+    const allCpu = kids ? 'All CPU — sit back and watch the fun! 🍿' : 'All CPU — sit back and watch the carnage.';
+    const tooFew = kids ? 'Turn on at least two players to play!' : 'Turn on at least two players.';
+    $('setup-error').textContent = active < 2 ? tooFew : humans === 0 ? allCpu : '';
+  }
+
+  // Re-render everything that depends on the game mode (copy, move names, mode switch).
+  setMode(mode) {
+    for (const b of document.querySelectorAll('#mode-switch [data-mode]')) {
+      const on = b.dataset.mode === mode;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-checked', String(on));
+    }
+    this.renderSlots();
+    this.renderArena();
+  }
+
+  goreChecked() {
+    return $('opt-gore').checked;
   }
 
   slotsChanged() {
@@ -149,6 +171,7 @@ export class Hud {
 
   // ---------------------------------------------------------------- arena screen
   renderArena() {
+    const kids = isKids();
     const side = (key, label) => {
       const root = $(key === 'atk' ? 'arena-atk' : 'arena-vic');
       root.innerHTML = '';
@@ -183,7 +206,7 @@ export class Hud {
           ANIMALS.map((a) =>
             el('button', {
               className: `animal ${a.id === pick.animal ? 'on' : ''}`,
-              title: `${a.name} — ${a.move}`,
+              title: `${a.name} — ${moveOf(a, kids)}`,
               html: `<span>${a.emoji}</span><small>${a.name}</small>`,
               onclick: () => {
                 pick.animal = a.id;
@@ -194,10 +217,11 @@ export class Hud {
         ),
       );
       const a = animalById(pick.animal);
-      root.append(el('div', { className: 'animal-info', html: key === 'atk' ? `<b>${a.move}</b> — ${a.blurb}` : `Gets torn apart, chained and dragged back to its cage.` }));
+      const victimText = kids ? 'Gets bonked silly, then floats back to its cozy cage. No harm done!' : 'Gets torn apart, chained and dragged back to its cage.';
+      root.append(el('div', { className: 'animal-info', html: key === 'atk' ? `<b>${moveOf(a, kids)}</b> — ${blurbOf(a, kids)}` : victimText }));
     };
-    side('atk', 'Attacker');
-    side('vic', 'Defender');
+    side('atk', kids ? 'Bonker' : 'Attacker');
+    side('vic', kids ? 'Bonkee' : 'Defender');
   }
 
   showArena() {
@@ -246,7 +270,7 @@ export class Hud {
         el('div', { className: 'avatar', textContent: animal.emoji }),
         el('div', { className: 'meta' }, [
           el('b', { textContent: p.name + (p.cpu ? ' 🤖' : '') }),
-          el('small', { textContent: rank >= 0 ? `${MEDALS[rank]} finished` : `🏠 ${home}/4 · 🐾 ${out} out` }),
+          el('small', { textContent: rank >= 0 ? `${medals()[rank]} finished` : `🏠 ${home}/4 · 🐾 ${out} out` }),
         ]),
       ]);
       chip.style.setProperty('--team', color.css);
@@ -292,15 +316,37 @@ export class Hud {
       node.style.setProperty('--c', COLORS[p.seat].css);
       return node;
     };
+    if (isKids()) {
+      // "⭐ Red Eagle vs Blue Tiger ⭐" in bubbly team-coloured pills.
+      const star = (cls) => el('span', { className: `kid-star ${cls}`, textContent: '⭐' });
+      const row = el('div', { className: 'row kid-row' }, [
+        star('l'),
+        side('a', atk, a),
+        el('span', { className: 'vs kid-vs', textContent: 'vs' }),
+        side('b', vic, v),
+        star('r'),
+      ]);
+      this.showBanner([row], 1800, 'kid');
+      return;
+    }
     this.showBanner([el('div', { className: 'row' }, [side('a', atk, a), el('span', { className: 'vs', textContent: 'VS' }), side('b', vic, v)])], 1800);
   }
 
-  // Brutal title card at the moment of the kill.
+  // Title card at the moment of the capture: brutal in Action mode, bubbly in Kids mode.
   killTitle(atk, vic) {
     const a = animalById(atk.animal);
+    if (isKids()) {
+      const card = el('div', { className: 'kid-card' }, [
+        el('div', { className: 'kid-move', html: `<span class="spark">✨</span>${moveOf(a, true)}!<span class="spark">✨</span>` }),
+        el('div', { className: 'kid-line', textContent: `${atk.name} ${verbOf(a, true)} ${vic.name}!` }),
+      ]);
+      card.style.setProperty('--c', COLORS[atk.seat].css);
+      this.showBanner([card], 2400, 'kid kid-kill');
+      return;
+    }
     const card = el('div', { className: 'kill-card' }, [
-      el('div', { className: 'kill-move', textContent: a.move.toUpperCase() }),
-      el('div', { className: 'kill-line', textContent: `${atk.name} ${a.verb} ${vic.name}` }),
+      el('div', { className: 'kill-move', textContent: moveOf(a, false).toUpperCase() }),
+      el('div', { className: 'kill-line', textContent: `${atk.name} ${verbOf(a, false)} ${vic.name}` }),
     ]);
     card.style.setProperty('--c', COLORS[atk.seat].css);
     this.showBanner([card], 2400, 'kill');
@@ -330,11 +376,33 @@ export class Hud {
     game.standings.forEach((seat, i) => {
       const p = game.players.find((x) => x.seat === seat);
       const a = animalById(p.animal);
-      const li = el('li', {}, [el('span', { className: 'medal', textContent: MEDALS[i] }), el('span', { textContent: `${a.emoji} ${p.name}` })]);
+      const li = el('li', {}, [el('span', { className: 'medal', textContent: medals()[i] }), el('span', { textContent: `${a.emoji} ${p.name}` })]);
       li.style.setProperty('--team', COLORS[seat].css);
       list.append(li);
     });
+    const winner = game.players.find((x) => x.seat === game.standings[0]);
+    const line = $('winner-line');
+    line.innerHTML = '';
+    if (winner) line.append(`${animalById(winner.animal).emoji} ${winner.name} wins the race home!`, el('small', { textContent: 'Great game, everybody! 🎉' }));
+    if (winner) line.style.setProperty('--team', COLORS[winner.seat].css);
+    this.confetti(isKids());
     $('gameover').classList.remove('hidden');
+  }
+
+  // Kids-mode win card: a shower of CSS confetti behind the card.
+  confetti(on) {
+    const root = $('confetti');
+    root.innerHTML = '';
+    if (!on) return;
+    for (let i = 0; i < 46; i++) {
+      const piece = el('i', { className: i % 3 === 0 ? 'round' : '' });
+      piece.style.left = `${Math.random() * 100}%`;
+      piece.style.background = CONFETTI_COLORS[i % CONFETTI_COLORS.length];
+      piece.style.animationDelay = `${-Math.random() * 4}s, ${-Math.random() * 2}s`;
+      piece.style.animationDuration = `${3 + Math.random() * 2.5}s, ${1 + Math.random() * 1.5}s`;
+      piece.style.setProperty('--drift', `${(Math.random() - 0.5) * 120}px`);
+      root.append(piece);
+    }
   }
 
   // ---------------------------------------------------------------- wiring
@@ -355,6 +423,9 @@ export class Hud {
       h.onGore?.(gore.checked);
     };
     h.onGore?.(gore.checked);
+    for (const b of document.querySelectorAll('#mode-switch [data-mode]')) {
+      b.onclick = () => h.onMode?.(b.dataset.mode);
+    }
     $('btn-start').onclick = () => h.onStart(this.players());
     $('btn-arena').onclick = () => h.onArenaOpen();
     $('btn-arena-back').onclick = () => h.onArenaBack();

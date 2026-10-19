@@ -86,12 +86,16 @@ export class Director {
     return this.anim.tween(duration, (k) => this.cut({ ...spec, yaw: y0 + (yawTo - y0) * k, fov: undefined }), ease);
   }
 
+  // Kids battles keep slow motion light and playful.
   slowmo(factor = 0.2, hold = 0.9) {
-    this.world.slowmo(factor, hold);
+    if (this.look === 'kids') this.world.slowmo(Math.max(0.4, factor), Math.min(hold, 0.7));
+    else this.world.slowmo(factor, hold);
   }
 
+  // Action: a hard red flash and a jolt. Kids: a soft sunny pop and a little wobble.
   impact(power = 1) {
-    this.world.flash(0.6 * power);
-    this.world.shake(0.12 * power);
+    const kids = this.look === 'kids';
+    this.world.flash((kids ? 0.35 : 0.6) * power);
+    this.world.shake((kids ? 0.07 : 0.12) * power);
   }
 }
