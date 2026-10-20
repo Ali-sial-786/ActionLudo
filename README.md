@@ -110,10 +110,14 @@ Action Ludo is an installable web app: no account, no sign-in, just open it and 
 
 ### Deploying to Firebase Hosting
 
-The site deploys to the Firebase project **actionludo-df9cc** (`.firebaserc`, `firebase.json`).
+The site deploys to the Firebase project **actionludo-df9cc** (`.firebaserc`, `firebase.json`) and is served at `https://actionludo-df9cc.web.app`. Hosting works on the free Spark plan.
 
-- **Automatically, from GitHub:** `.github/workflows/firebase-hosting.yml` builds, tests and deploys every push to `main` (and gives pull requests a preview URL). It needs one repository secret, `FIREBASE_SERVICE_ACCOUNT_ACTIONLUDO_DF9CC`, holding the JSON key of a service account allowed to deploy to the project. The easiest way to create it is `npx firebase-tools init hosting:github` (choose the existing `dist` setup and keep `firebase.json`); or create a key in the Google Cloud console (IAM → Service accounts) and add it under the repo's Settings → Secrets and variables → Actions. Until the secret exists the workflow still builds and tests, and skips the deploy.
-- **By hand:** `npx firebase-tools login` once, then `npm run deploy`.
+1. **Create the Hosting site (once).** Firebase projects created after 15 October 2026 don't get a default Hosting site until one is asked for. Run `npx firebase-tools login`, then `npx firebase-tools hosting:sites:create actionludo-df9cc`. If the site already exists, that command fails harmlessly with an error saying so.
+2. **Deploy by hand:** `npm install`, then `npm run deploy`.
+3. **Or deploy automatically from GitHub:** `.github/workflows/firebase-hosting.yml` builds, tests and deploys every push to the repository's default branch, and gives pull requests a preview URL. It needs one repository secret, `FIREBASE_SERVICE_ACCOUNT_ACTIONLUDO_DF9CC`, holding the JSON key of a service account allowed to deploy to the project.
+   - The easiest way to create it is `npx firebase-tools init hosting:github`, run in a checkout of this repository, entering `Ali-sial-786/ActionLudo` as the repository. It creates the service account and the secret. It also writes two workflow files of its own (`firebase-hosting-merge.yml` and `firebase-hosting-pull-request.yml`); delete them, since this repository already has one, or every push deploys twice.
+   - Or by hand: in the Google Cloud console (IAM → Service accounts), create a service account with the roles Firebase Hosting Admin, Firebase Authentication Admin, API Keys Viewer and Cloud Run Viewer. Download a JSON key and add it under the repository's Settings → Secrets and variables → Actions.
+   - Until the secret exists, the workflow still builds and tests, and skips the deploy.
 
 Hosting serves the hashed `assets/` with a one-year immutable cache, while `index.html`, `sw.js` and the manifest are always revalidated, so a new release reaches players on their next visit.
 

@@ -1,7 +1,7 @@
 name: Deploy to Firebase Hosting
 
 # Builds the game and publishes it to Firebase Hosting (project actionludo-df9cc):
-#   - pushes to main go live
+#   - pushes to the repository's default branch go live (other branches just build and test)
 #   - pull requests get a temporary preview URL, posted as a comment on the PR
 # Needs one repository secret, FIREBASE_SERVICE_ACCOUNT_ACTIONLUDO_DF9CC: the JSON key of a
 # service account that can deploy to the project. `npx firebase-tools init hosting:github`
@@ -9,7 +9,6 @@ name: Deploy to Firebase Hosting
 # Without the secret the workflow still builds and tests, and skips the deploy.
 on:
   push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -33,7 +32,7 @@ jobs:
       - run: npm test
       - run: npm run build
       - name: Deploy live
-        if: env.HAS_FIREBASE_KEY == 'true' && github.event_name != 'pull_request'
+        if: env.HAS_FIREBASE_KEY == 'true' && github.event_name != 'pull_request' && github.ref_name == github.event.repository.default_branch
         uses: FirebaseExtended/action-hosting-deploy@v0
         with:
           repoToken: ${{ secrets.GITHUB_TOKEN }}
