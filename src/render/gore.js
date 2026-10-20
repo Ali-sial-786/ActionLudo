@@ -130,12 +130,13 @@ export function fleshify(material) {
   return m;
 }
 
-// Axis-aligned bounds of `obj`'s meshes expressed in obj's own local space.
-function localBounds(obj) {
+// Axis-aligned bounds of `obj`'s meshes expressed in `frame`'s local space (obj's own by default).
+function localBounds(obj, frame = obj) {
   const box = new THREE.Box3();
-  const inv = new THREE.Matrix4().copy(obj.matrixWorld).invert();
-  const tmp = new THREE.Box3();
   obj.updateMatrixWorld(true);
+  frame.updateMatrixWorld(true);
+  const inv = new THREE.Matrix4().copy(frame.matrixWorld).invert();
+  const tmp = new THREE.Box3();
   obj.traverse((o) => {
     if (!o.isMesh || o.userData.wound) return;
     if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
@@ -175,7 +176,51 @@ const _q = new THREE.Quaternion();
 const _s = new THREE.Vector3();
 const _m = new THREE.Matrix4();
 const _e = new THREE.Euler();
+const _c = new THREE.Vector3();
+const _h = new THREE.Vector3();
 const Y = new THREE.Vector3(0, 1, 0);
+
+// Directions used to probe the lowest visible point of a half that has been cut open.
+const PROBES = [];
+for (let i = 0; i < 40; i++) {
+  const y = 1 - (2 * (i + 0.5)) / 40;
+  const r = Math.sqrt(1 - y * y);
+  const a = i * 2.39996;
+  PROBES.push(new THREE.Vector3(Math.cos(a) * r, y, Math.sin(a) * r));
+}
+
+// World height of the lowest visible point of a torn piece. Every shape on the animals is a unit
+// blob sized by its transform, so each mesh is treated as the ellipsoid inside its bounding box;
+// a body half that has been cut open only counts the side its clipping plane keeps.
+function lowestPoint(obj) {
+  let low = Infinity;
+  obj.traverse((o) => {
+    if (!o.isMesh || !o.visible || o.userData.wound) return;
+    const g = o.geometry;
+    if (!g.boundingBox) g.computeBoundingBox();
+    const bb = g.boundingBox;
+    bb.getCenter(_c);
+    bb.getSize(_h).multiplyScalar(0.5);
+    const e = o.matrixWorld.elements;
+    const plane = o.material.clippingPlanes?.[0];
+    if (!plane) {
+      // support of the ellipsoid along -y
+      const ry = Math.hypot(e[1] * _h.x, e[5] * _h.y, e[9] * _h.z);
+      low = Math.min(low, _v.copy(_c).applyMatrix4(o.matrixWorld).y - ry);
+      return;
+    }
+    for (const d of PROBES) {
+      _v.set(_c.x + d.x * _h.x, _c.y + d.y * _h.y, _c.z + d.z * _h.z).applyMatrix4(o.matrixWorld);
+      if (_v.y < low && plane.distanceToPoint(_v) >= 0) low = _v.y;
+    }
+  });
+  return low;
+}
+
+const contains = (root, obj) => {
+  for (let o = obj; o; o = o.parent) if (o === root) return true;
+  return false;
+};
 
 export class Gore {
   constructor(world, fx) {
@@ -231,12 +276,12 @@ export class Gore {
     }
   }
 
-  // Omnidirectional explosion of blood, a hanging red mist and lumps of meat.
+  // Omnidirectional explosion of blood, a short-lived red mist and a few lumps of meat.
   burst(origin, power = 1) {
     if (!this.on) return;
-    this.spray(origin, null, { count: Math.round(170 * power), speed: 3.4 * power, spread: 1, up: 1.4, size: [0.005, 0.016], splat: 0.35 });
-    this.mist(origin, 1.2 * power * (0.6 + 0.4 * blood()));
-    this.meat(origin, Math.round(10 * power), 2.6 * power);
+    this.spray(origin, null, { count: Math.round(110 * power), speed: 2.8 * power, spread: 1, up: 1.1, size: [0.005, 0.014], splat: 0.35 });
+    this.mist(origin, power * (0.6 + 0.4 * blood()));
+    this.meat(origin, Math.round(6 * power), 1.8 * power);
   }
 
   mist(origin, size = 1) {
@@ -270,7 +315,8 @@ export class Gore {
       m.castShadow = true;
       this.layer.add(m);
       const v = new THREE.Vector3(rand(-1, 1), rand(0.2, 1.2), rand(-1, 1)).normalize().multiplyScalar(speed * rand(0.4, 1));
-      this.chunks.push({ m, v, ang: new THREE.Vector3(rand(-14, 14), rand(-14, 14), rand(-14, 14)), r: bone ? 0.01 : s, life: rand(9, 14), rest: false, bleed: 0.5 });
+      // stray scraps shrink away soon after they land
+      this.chunks.push({ m, v, ang: new THREE.Vector3(rand(-8, 8), rand(-8, 8), rand(-8, 8)), r: bone ? 0.01 : s, life: rand(2.2, 3.4), rest: false, bleed: 0.3 });
     }
   }
 
@@ -385,8 +431,14 @@ export class Gore {
     });
   }
 
-  // Tear an animal apart. mode 'limbs' rips off head/limbs/tail; 'halves' also splits the torso in two.
-  dismember(view, { mode = 'limbs', dir = null, power = 2.4, up = 1.8, spin = 7, axis = 'z' } = {}) {
+  // Tear an animal apart into a few big pieces that part briskly, turn about one axis (no random
+  // tumbling) and come to rest on the board close to the square.
+  //   mode 'limbs': the head is flung off, the legs drop away around the torso, which rolls onto its side.
+  //   mode 'halves': the torso is cut in two across `axis` ('z' front/back, 'x' left/right); limbs and
+  //   head ride along with the half they sit on, only parts the cut runs through come off on their own.
+  // `power` sets how far the pieces travel and `up` how high they pop; the carcass ends up lying with
+  // its back towards `toward` (a horizontal direction, e.g. the camera's side) when one is given.
+  dismember(view, { mode = 'limbs', dir = null, power = 2.4, up = 1.8, axis = 'z', toward = null } = {}) {
     const layer = this.layer;
     view.isolateMaterials();
     if (this.on) {
@@ -400,37 +452,84 @@ export class Gore {
       mode = 'limbs'; // bloodless: parts come off cleanly, nothing is cut open
     }
     view.root.updateMatrixWorld(true);
-    const center = view.model.getWorldPosition(new THREE.Vector3());
-    center.y += 0.25;
-    const chunks = [];
-    const push = (obj, parent, vel, extra = {}) => {
-      const box = new THREE.Box3().setFromObject(obj);
-      const r = Math.max(0.03, box.getSize(new THREE.Vector3()).length() * 0.25);
-      chunks.push({ obj, parent, vel, ang: new THREE.Vector3(rand(-spin, spin), rand(-spin, spin), rand(-spin, spin)), r, rest: false, landed: false, bleed: 1, ...extra });
-    };
     const d = dir ? dir.clone().setY(0).normalize() : null;
-
-    for (const root of this.chunkRoots(view)) {
-      const parent = root.parent;
-      const wp = root.getWorldPosition(new THREE.Vector3());
-      layer.attach(root);
-      const out = wp.clone().sub(center).setY(0);
-      if (out.lengthSq() < 1e-4) out.set(rand(-1, 1), 0, rand(-1, 1));
-      out.normalize();
-      const vel = out.multiplyScalar(power * rand(0.6, 1.25)).add(new THREE.Vector3(0, up * rand(0.6, 1.3), 0));
-      if (d) vel.addScaledVector(d, power * rand(0.2, 0.6));
-      push(root, parent, vel);
-      this.spray(wp, vel, { count: 26, speed: 2.4, spread: 0.6, up: 0.4 });
-    }
-
     const body = view.parts.body ?? view.model;
     const bodyParent = body.parent;
-    if (mode === 'halves') {
-      const lb = localBounds(body);
-      const centerL = lb.getCenter(new THREE.Vector3());
-      const sizeL = lb.getSize(new THREE.Vector3());
+    const head = view.parts.head;
+    const roots = this.chunkRoots(view);
+    const halves = mode === 'halves';
+
+    // Which pieces come off on their own: in 'limbs' mode the head plus the four biggest limbs (the
+    // rest stay on the torso); in 'halves' mode only the parts the cut runs through.
+    const n = axis === 'x' ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1);
+    const comp = axis === 'x' ? 'x' : 'z';
+    const info = roots.map((root) => ({ root, parent: root.parent, box: localBounds(root, body), isHead: !!head && contains(root, head) }));
+    for (const r of info) layer.attach(r.root);
+    const lb = localBounds(body);
+    const centerL = lb.getCenter(new THREE.Vector3());
+    // the middle of the torso as it lies now (an animal knocked on its side has its feet off to one side)
+    const core = body.localToWorld(centerL.clone());
+    const sizeL = lb.getSize(new THREE.Vector3());
+    if (halves) {
+      for (const r of info) {
+        const lo = r.box.min[comp] - centerL[comp];
+        const hi = r.box.max[comp] - centerL[comp];
+        r.free = Math.min(hi, -lo) > Math.max(0.015, 0.2 * (hi - lo));
+        r.side = lo + hi >= 0 ? 1 : -1;
+      }
+    } else {
+      const limbs = info.filter((r) => !r.isHead).sort((a, b) => b.box.getSize(_v).lengthSq() - a.box.getSize(_c).lengthSq());
+      for (const r of info) r.free = r.isHead || limbs.indexOf(r) < 4;
+      for (const r of info) r.side = 1;
+    }
+
+    const chunks = [];
+    const launch = (obj, parent, com, vel, { w, left }, extra = {}) => {
+      const r = Math.max(0.03, localBounds(obj).getSize(new THREE.Vector3()).length() * 0.25);
+      chunks.push({ obj, parent, com, p: obj.localToWorld(com.clone()), vel, w, left, r, t: 0, rest: false, landed: false, bleed: 1, ...extra });
+    };
+    // Turn by `angle` about `axis` in all, at a rate that gets most of it done in the air; a piece
+    // that lands early topples over the rest of the way on the board.
+    const turn = (obj, com, vel, axisW, angle) => {
+      const y = obj.localToWorld(com.clone()).y - floorAt(core.x, core.z);
+      const t = (vel.y + Math.sqrt(vel.y * vel.y + 19.6 * Math.max(0.05, y))) / 9.8;
+      return { w: axisW.clone().normalize().multiplyScalar(Math.max(2.5, angle / t)), left: angle };
+    };
+    // The shortest turn that swings world direction `from` (a piece's long axis) round onto `to`.
+    const lieDown = (obj, com, vel, from, to) => {
+      const w = from.clone().cross(to);
+      if (w.lengthSq() < 1e-6) w.set(0, 1, 0).cross(from);
+      if (w.lengthSq() < 1e-6) w.set(1, 0, 0);
+      return turn(obj, com, vel, w, from.angleTo(to));
+    };
+    // The single turn that carries two of a piece's directions (fromA, fromB) onto (toA, toB) at once.
+    const settle = (obj, com, vel, fromA, toA, fromB, toB) => {
+      const basis = (a, b) => {
+        const x = a.clone().normalize();
+        const y = b.clone().addScaledVector(x, -b.dot(x));
+        if (y.lengthSq() < 1e-6) y.set(0, 1, 0).addScaledVector(x, -x.y);
+        y.normalize();
+        return new THREE.Matrix4().makeBasis(x, y, x.clone().cross(y));
+      };
+      const m = basis(toA, toB).multiply(basis(fromA, fromB).transpose());
+      const q = new THREE.Quaternion().setFromRotationMatrix(m);
+      if (q.w < 0) q.set(-q.x, -q.y, -q.z, -q.w);
+      const angle = 2 * Math.acos(Math.min(1, q.w));
+      const w = new THREE.Vector3(q.x, q.y, q.z);
+      if (w.lengthSq() < 1e-10) w.set(0, 1, 0);
+      return turn(obj, com, vel, w, angle);
+    };
+    // the way a carcass rolls: its back towards `toward` (the camera's side), else its nearest side
+    const backTo = (upW) => {
+      const t = toward ? toward.clone().setY(0) : upW.clone().setY(0);
+      if (t.lengthSq() < 0.09) t.copy(d ? new THREE.Vector3(-d.z, 0, d.x) : new THREE.Vector3(1, 0, 0));
+      return t.normalize();
+    };
+
+    // the torso
+    let halfB = null;
+    if (halves) {
       const centerW = body.localToWorld(centerL.clone());
-      const n = axis === 'x' ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1);
       const planeA = { local: new THREE.Plane().setFromNormalAndCoplanarPoint(n, centerL), world: new THREE.Plane() };
       const planeB = { local: new THREE.Plane().setFromNormalAndCoplanarPoint(n.clone().negate(), centerL), world: new THREE.Plane() };
       const twin = body.clone(true);
@@ -464,30 +563,82 @@ export class Gore {
       twin.position.copy(body.position);
       twin.quaternion.copy(body.quaternion);
       twin.scale.copy(body.scale);
+      twin.updateMatrixWorld(true);
       planeA.world.copy(planeA.local).applyMatrix4(body.matrixWorld);
       planeB.world.copy(planeB.local).applyMatrix4(body.matrixWorld);
       layer.attach(body);
       layer.attach(twin);
-      const axisW = n.clone().transformDirection(body.matrixWorld).setY(0).normalize();
-      const vA = axisW.clone().multiplyScalar(power * 0.75).add(new THREE.Vector3(0, up * 0.9, 0));
-      const vB = axisW.clone().multiplyScalar(-power * 0.75).add(new THREE.Vector3(0, up * 0.9, 0));
-      if (d) {
-        vA.addScaledVector(d, power * 0.3);
-        vB.addScaledVector(d, power * 0.3);
+      halfB = twin;
+      const axisW = n.clone().transformDirection(body.matrixWorld).setY(0);
+      if (axisW.lengthSq() < 0.09) axisW.set(d ? -d.z : 1, 0, d ? d.x : 0);
+      axisW.normalize();
+      // the halves part along the cut, far enough to leave the middle of the square clear
+      const out = 0.4 * power;
+      const hop = 1.1 + 0.4 * up;
+      const square = view.root.getWorldPosition(new THREE.Vector3());
+      const axisN = n.clone().transformDirection(body.matrixWorld);
+      const upW = new THREE.Vector3(0, 1, 0).transformDirection(body.matrixWorld);
+      // cut across the camera's line (front / back): each half rolls onto its side with its back to
+      // the camera, outer end a little low so the cut tilts up; cut along it (left / right): each
+      // half falls outward onto its flank so the raw face turns up
+      const across = !toward || Math.abs(toward.dot(axisW)) < 0.7;
+      for (const [half, s, plane] of [
+        [body, 1, planeA],
+        [twin, -1, planeB],
+      ]) {
+        const com = centerL.clone().addScaledVector(n, s * sizeL[comp] * 0.25);
+        const gap = body.localToWorld(com.clone()).sub(square).setY(0).dot(axisW) * s;
+        const vel = axisW.clone().multiplyScalar(s * (out + Math.max(0, 0.42 - gap - out * 0.3) / 0.3)).add(new THREE.Vector3(0, hop, 0));
+        if (d) vel.addScaledVector(d, out * 0.25);
+        const from = axisN.clone().multiplyScalar(s);
+        const tilt = across ? 0.3 : 1.2;
+        const to = axisW.clone().multiplyScalar(s * Math.cos(tilt)).addScaledVector(Y, -Math.sin(tilt));
+        const spin = across ? settle(half, com, vel, from, to, upW, backTo(upW)) : lieDown(half, com, vel, from, to);
+        const extra = s > 0 ? {} : { twin: true, restFrom: body }; // the clone borrows the torso's rest pose
+        launch(half, bodyParent, com, vel, spin, { plane, bleed: 1.6, ...extra });
       }
-      push(body, bodyParent, vA, { plane: planeA, bleed: 2.5 });
-      // the clone's userData was JSON-copied, so it borrows the original torso's rest pose
-      push(twin, bodyParent, vB, { plane: planeB, bleed: 2.5, twin: true, restFrom: body });
-      this.spray(centerW, axisW, { count: 70, speed: 3, spread: 0.7, up: 0.8 });
-      this.spray(centerW, axisW.clone().negate(), { count: 70, speed: 3, spread: 0.7, up: 0.8 });
+      this.spray(centerW, axisW, { count: 34, speed: 2.4, spread: 0.5, up: 0.6 });
+      this.spray(centerW, axisW.clone().negate(), { count: 34, speed: 2.4, spread: 0.5, up: 0.6 });
     } else {
+      // the torso drops and slumps onto its side, its back to the camera, sliding clear of the
+      // middle of the square where the killer is about to stand
+      const upW = new THREE.Vector3(0, 1, 0).transformDirection(body.matrixWorld);
+      const vel = new THREE.Vector3(0, 0.9, 0);
+      const square = view.root.getWorldPosition(new THREE.Vector3());
+      const off = core.clone().sub(square).setY(0);
+      const reach = off.length();
+      if (reach < 0.01) off.copy(toward ?? d ?? new THREE.Vector3(0, 0, 1)).setY(0);
+      vel.addScaledVector(off.normalize(), Math.max(0, 0.5 - reach) / 0.3);
+      if (d) vel.addScaledVector(d, power * 0.08);
       layer.attach(body);
-      const vel = new THREE.Vector3(rand(-0.3, 0.3), up * 0.35, rand(-0.3, 0.3));
-      if (d) vel.addScaledVector(d, power * 0.35);
-      push(body, bodyParent, vel, { bleed: 2 });
+      launch(body, bodyParent, centerL.clone(), vel, lieDown(body, centerL, vel, upW, backTo(upW)), { bleed: 1.2 });
     }
-    this.burst(center, 1);
-    this.pool(center.clone(), 0.7, 3);
+
+    // head and limbs: the ones that come off are flung clear, the others ride their half
+    for (const r of info) {
+      if (!r.free) {
+        (r.side > 0 || !halfB ? body : halfB).attach(r.root);
+        chunks.push({ obj: r.root, parent: r.parent, rider: true, rest: true });
+        continue;
+      }
+      const com = localBounds(r.root).getCenter(new THREE.Vector3());
+      const wp = r.root.localToWorld(com.clone());
+      const outDir = wp.clone().sub(core).setY(0);
+      if (outDir.lengthSq() < 1e-4) outDir.set(rand(-1, 1), 0, rand(-1, 1));
+      outDir.normalize();
+      const flung = r.isHead || halves;
+      const vel = outDir.clone().multiplyScalar(power * (flung ? 0.42 : 0.24) * rand(0.85, 1.15)).add(new THREE.Vector3(0, (flung ? 1.6 + 0.35 * up : 0.9) * rand(0.9, 1.1), 0));
+      if (d) vel.addScaledVector(d, power * (r.isHead ? 0.2 : 0.08));
+      // it lands lying flat: a limb along the board pointing away from the body, a head on its side
+      const pivot = r.root.getWorldPosition(new THREE.Vector3());
+      const long = wp.clone().sub(pivot);
+      const axis = r.isHead || long.length() < 0.04 ? new THREE.Vector3(0, 1, 0).transformDirection(r.root.matrixWorld) : long.normalize();
+      const flat = outDir.clone().multiplyScalar(Math.cos(0.2)).addScaledVector(Y, r.isHead ? 0 : -Math.sin(0.2));
+      launch(r.root, r.parent, com, vel, lieDown(r.root, com, vel, axis, flat), { bleed: r.isHead ? 1.2 : 0.6 });
+      this.spray(wp, vel, { count: r.isHead ? 16 : 8, speed: 1.8, spread: 0.5, up: 0.4 });
+    }
+    this.burst(core, 0.6);
+    this.pool(core.clone(), 0.7, 3);
     const set = { view, chunks };
     view.gore = set;
     this.sets.add(set);
@@ -500,6 +651,8 @@ export class Gore {
     if (!set) return;
     this.sets.delete(set);
     view.root.updateMatrixWorld(true);
+    // parts that rode along on a torso half fly back on their own
+    for (const c of set.chunks) if (c.rider) this.layer.attach(c.obj);
     const jobs = set.chunks.map((c) => {
       const r = (c.restFrom ?? c.obj).userData.rest;
       const off = new THREE.Quaternion().setFromEuler(new THREE.Euler(rand(-mangle, mangle), rand(-mangle, mangle), rand(-mangle, mangle)));
@@ -615,14 +768,52 @@ export class Gore {
     // meat chunks
     this.chunks = this.chunks.filter((c) => this.stepBody(c, c.m, dt));
     // torn body parts
-    for (const set of this.sets) {
-      for (const c of set.chunks) {
-        this.stepBody(c, c.obj, dt, true);
-        if (c.plane) {
-          c.obj.updateMatrixWorld();
-          c.plane.world.copy(c.plane.local).applyMatrix4(c.obj.matrixWorld);
+    for (const set of this.sets) for (const c of set.chunks) this.stepPiece(c, dt);
+  }
+
+  // Put a torn piece where its simulated centre is (it turns about that centre, not its pivot).
+  place(c) {
+    const obj = c.obj;
+    obj.position.copy(c.com).multiply(obj.scale).applyQuaternion(obj.quaternion).negate().add(c.p);
+    obj.updateMatrixWorld(true);
+    if (c.plane) c.plane.world.copy(c.plane.local).applyMatrix4(obj.matrixWorld);
+  }
+
+  // A torn piece in flight: gravity, a steady turn about its own centre, and a landing that never
+  // lets its lowest visible point sink into the board.
+  stepPiece(c, dt) {
+    if (c.rest) return;
+    c.t += dt;
+    c.vel.y -= 9.8 * dt;
+    c.p.addScaledVector(c.vel, dt);
+    const a = Math.min(c.w.length() * dt, c.left);
+    if (a > 1e-6) {
+      c.obj.quaternion.premultiply(_q.setFromAxisAngle(_v.copy(c.w).normalize(), a));
+      c.left -= a;
+    }
+    this.place(c);
+    if (this.on && !c.landed && Math.random() < 0.25 * c.bleed) this.spray(c.p, null, { count: 1, speed: 0.3, up: 0, size: [0.004, 0.009], splat: 0.5 });
+    const f = floorAt(c.p.x, c.p.z);
+    const low = lowestPoint(c.obj);
+    if (low < f) {
+      c.p.y += f - low;
+      this.place(c);
+      if (c.vel.y > 0) return; // still on the way up
+      if (!c.landed) {
+        c.landed = true;
+        this.decal(c.p, c.r * rand(2.5, 4), 'splat');
+        // one small bounce off a hard landing, then it stays down
+        if (c.vel.y < -2.5) {
+          c.vel.set(c.vel.x * 0.4, -c.vel.y * 0.18, c.vel.z * 0.4);
+          return;
         }
       }
+      c.vel.set(c.vel.x * 0.5, 0, c.vel.z * 0.5);
+    }
+    // settled once it is down and has finished turning (or after a while, whatever happens)
+    if ((c.landed && c.left <= 1e-4 && low <= f + 0.005) || c.t > 3) {
+      c.rest = true;
+      if (this.on) this.pool(c.p.clone().setY(f), c.r * rand(2.5, 4), 3);
     }
   }
 
