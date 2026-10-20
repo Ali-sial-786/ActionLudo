@@ -3,6 +3,10 @@ import { Ease } from '../engine/anim.js';
 
 const DEG = Math.PI / 180;
 const UP = new THREE.Vector3(0, 1, 0);
+// Every shot is framed wider than its choreography asks, so the fight's action stays in view:
+// distances are scaled up and the lens never gets narrower than MIN_FOV.
+const FRAMING = { action: 1.4, kids: 1.2 };
+const MIN_FOV = 34;
 
 // Shot language for battles, expressed in the fight's own frame:
 //   yaw 0 = side-on, +90 = from beyond the victim looking back, -90 = over the attacker's shoulder.
@@ -14,9 +18,9 @@ export class Director {
     this.scale = 1;
   }
 
-  // `scale` pushes every shot further out for bulky animals.
+  // `scale` pushes every shot further out for bulky animals (on top of the mode's framing).
   begin(A, V, scale = 1, look = 'action') {
-    this.scale = scale;
+    this.scale = scale * (FRAMING[look] ?? 1);
     this.look = look;
     this.A = A.clone();
     this.V = V.clone();
@@ -62,7 +66,7 @@ export class Director {
     const { pos, target } = this.pose(spec);
     this.world.camera.position.copy(pos);
     this.world.controls.target.copy(target);
-    if (spec.fov) this.world.setFov(spec.fov);
+    if (spec.fov) this.world.setFov(Math.max(MIN_FOV, spec.fov));
   }
 
   // Smooth camera move to a new shot.
@@ -70,7 +74,8 @@ export class Director {
     const { pos, target } = this.pose(spec);
     if (spec.fov) {
       const f0 = this.world.camera.fov;
-      this.anim.tween(duration, (k) => this.world.setFov(f0 + (spec.fov - f0) * k), ease);
+      const f1 = Math.max(MIN_FOV, spec.fov);
+      this.anim.tween(duration, (k) => this.world.setFov(f0 + (f1 - f0) * k), ease);
     }
     return this.world.cameraTo(pos, target, duration, ease);
   }
