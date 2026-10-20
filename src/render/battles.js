@@ -16,6 +16,29 @@ const wpos = (obj, out = new THREE.Vector3()) => obj.getWorldPosition(out);
 const bodyPoint = (view, y = 0.28) => wpos(view.model).add(new THREE.Vector3(0, y, 0));
 const headPoint = (view) => (view.parts.head ? wpos(view.parts.head) : bodyPoint(view, 0.45));
 
+const _box = new THREE.Box3();
+// Middle of an animal as it actually lies (it moves with the body when the animal is knocked over).
+const midPoint = (view) => _box.setFromObject(view.model).getCenter(new THREE.Vector3());
+
+// Knock an animal onto its side (k = 0..1); `toward` = +1 rolls its back to its own +x side. It is
+// lifted as it goes over, just enough that nothing (splayed legs, a flat croc) sinks into the board.
+function knockDown(view, k, toward = 1, angle = 1.35) {
+  const m = view.model;
+  const key = `${toward}:${angle}`;
+  if (m.userData.knock?.key !== key) {
+    const [rz, y] = [m.rotation.z, m.position.y];
+    m.rotation.z = -toward * angle;
+    m.position.y = 0.07;
+    view.root.updateMatrixWorld(true);
+    const low = _box.setFromObject(m, true).min.y;
+    m.rotation.z = rz;
+    m.position.y = y;
+    m.userData.knock = { key, lift: THREE.MathUtils.clamp(BOARD_Y + 0.005 - low, 0, 0.2) };
+  }
+  m.rotation.z = -toward * angle * k;
+  m.position.y = 0.07 + m.userData.knock.lift * k;
+}
+
 function setZ(view, z, y = null) {
   view.model.position.z = z;
   if (y !== null) view.model.position.y = 0.07 + y;
@@ -38,24 +61,39 @@ function limbsOf(view) {
   return LIMB_NAMES.map((n) => p[n]).filter(Boolean).concat(p.legs ?? []);
 }
 
-// Victim thrashes: legs kick, head jerks, body convulses. `fade` makes it die down (death throes).
+// One convulsion: a fast snap out over the first quarter of the beat, then an eased return to rest.
+const kick = (u) => (u < 0.25 ? Ease.outQuad(u / 0.25) : 1 - Ease.inOutSine((u - 0.25) / 0.75));
+// Which way each limb swings on a kick: fore limbs reach forward, hind limbs shove back.
+const SWING = { legFL: -1, legFR: -1, armL: -1, armR: -1, clawL: -0.5, clawR: -0.5, wingL: -0.4, wingR: -0.4, legBL: 1, legBR: 1, legL: 1, legR: 1 };
+const KICKS_PER_SECOND = 2.6;
+
+// Victim thrashes in a few big, deliberate convulsions (about 2.6 a second): legs kick out, the head
+// jerks back, the jaw gapes and the body jolts. `fade` makes each one weaker (death throes). Every
+// joint is back where it started when the tween ends, so nothing pops on the next move.
 function struggle(ctx, view, dur, power = 1, fade = false) {
-  const limbs = limbsOf(view);
-  const rest = limbs.map((l) => l.rotation.clone());
-  const head = view.parts.head;
+  const p = view.parts;
+  const limbs = LIMB_NAMES.filter((n) => p[n]).map((n) => [p[n], SWING[n]]);
+  (p.legs ?? []).forEach((l, i) => limbs.push([l, i % 2 ? 1 : -1]));
+  const rest = limbs.map(([l]) => l.rotation.x);
+  const head = p.head;
   const h0 = head?.rotation.clone();
+  const j0 = p.jaw?.rotation.x ?? 0;
   const m0 = view.model.rotation.clone();
+  const beats = Math.max(1, Math.round(dur * KICKS_PER_SECOND));
   return ctx.anim.tween(dur, (k) => {
-    const a = power * (fade ? 1 - k : 1);
-    const t = ctx.anim.time;
-    limbs.forEach((l, i) => (l.rotation.x = rest[i].x + Math.sin(t * 26 + i * 1.9) * 0.6 * a));
+    const b = Math.min(k * beats, beats - 1e-6);
+    const n = Math.floor(b);
+    // alternate a full splay with a smaller tuck; throes lose strength beat by beat
+    const alt = n % 2 ? -0.6 : 1;
+    const s = (k >= 1 ? 0 : kick(b - n)) * power * (fade ? 1 - (0.75 * n) / beats : 1);
+    limbs.forEach(([l, w], i) => (l.rotation.x = rest[i] + w * s * alt * 0.65));
     if (head) {
-      head.rotation.y = h0.y + Math.sin(t * 17) * 0.4 * a;
-      head.rotation.x = h0.x + Math.sin(t * 23) * 0.25 * a;
+      head.rotation.x = h0.x - s * 0.38;
+      head.rotation.y = h0.y + s * 0.3 * Math.sign(alt);
     }
-    if (view.parts.jaw) view.parts.jaw.rotation.x = Math.abs(Math.sin(t * 13)) * 0.6 * a;
-    view.model.rotation.z = m0.z + Math.sin(t * 31) * 0.07 * a;
-    view.model.rotation.x = m0.x + Math.sin(t * 19) * 0.04 * a;
+    if (p.jaw) p.jaw.rotation.x = j0 + s * 0.5;
+    view.model.rotation.z = m0.z + s * 0.09 * Math.sign(alt);
+    view.model.rotation.x = m0.x - s * 0.05;
   });
 }
 
@@ -67,10 +105,10 @@ function gait(p, t, amp = 0.6) {
   p.legFR.rotation.x = p.legBL.rotation.x = -s * amp;
 }
 
-// A wound with spurting blood, a red flash and a crunch.
+// A wound with one tight jet of blood, a red flash and a crunch.
 function hit(ctx, point, { dir = UP, count = 45, speed = 2.6, wound = 0.05, gash = 0, sound = 'bite', impact = 0.7, mist = 0.6 } = {}) {
-  ctx.gore.spray(point, dir, { count: Math.round(count * 1.8), speed, spread: 0.55, up: 0.6 });
-  if (mist) ctx.gore.mist(point, mist);
+  ctx.gore.spray(point, dir, { count: Math.round(count * 0.9), speed: speed * 0.85, spread: 0.35, up: 0.45 });
+  if (mist) ctx.gore.mist(point, mist * 0.6);
   if (wound) ctx.gore.wound(ctx.vic, point, { size: wound, gash });
   if (sound) ctx.sfx.play(sound);
   ctx.D.impact(impact);
@@ -86,12 +124,12 @@ function killcam(ctx, spec, slow = 0.18, hold = 1.0) {
 
 // The kill: the victim is torn apart.
 function finish(ctx, opts = {}) {
-  const c = bodyPoint(ctx.vic, 0.3);
+  const c = midPoint(ctx.vic);
   ctx.sfx.play('rip');
   ctx.sfx.play('crunch', { delay: 0.05 });
-  ctx.D.impact(1.4);
-  ctx.fx.victimBurst(c, DEBRIS[ctx.vic.animal], 0.6);
-  ctx.gore.dismember(ctx.vic, { dir: ctx.dir, ...opts });
+  ctx.D.impact(1.2);
+  ctx.fx.victimBurst(c, DEBRIS[ctx.vic.animal], 0.3);
+  ctx.gore.dismember(ctx.vic, { dir: ctx.dir, toward: ctx.D.r, ...opts });
   // the killer is left blood-soaked around the mouth
   for (let i = 0; i < 2; i++) ctx.gore.wound(ctx.atk, headPoint(ctx.atk).add(new THREE.Vector3(rand(-0.04, 0.04), -0.03, 0)), { size: 0.045 });
   ctx.onKill?.();
