@@ -21,9 +21,9 @@ A cute, bloodless version of the whole game for younger players — same board, 
 | --- | --- | --- |
 | Animals | Realistic predators | Cute, chunky cartoon pals |
 | Captures | Slow-motion kill-cam, blood, dismemberment, carcass chained and dragged home | A playful move (hug, tickle, splash, bounce…), then the loser floats back to its cozy cage — no blood, ever (gore is forced off and the option is hidden) |
-| Look | Dusky arena, stone table, letterbox bars and a grim, desaturated battle grade with a red impact flash | Sunny sky with puffy clouds, rolling hills and lollipop trees, a flowery meadow and a gingham picnic cloth; soft warm lighting, candy-coloured board, pastel playpen cages and a rainbow-pip die. Battles keep the bright lights and add only a gentle, cheerful colour grade |
+| Look | A ruined stone arena in the jungle at night: starry sky and a big moon, broken colonnades and tiers, flaming braziers and drifting embers around a carved stone table; letterbox bars and a grim, desaturated battle grade with a red impact flash | Sunny sky with puffy clouds, rolling hills and lollipop trees, a flowery meadow and a gingham picnic cloth; soft warm lighting, candy-coloured board, pastel playpen cages and a rainbow-pip die. Battles keep the bright lights and add only a gentle, cheerful colour grade |
 | Menus & HUD | Dark glass panels, condensed poster type | Bubbly rounded font ([Fredoka](https://fonts.google.com/specimen/Fredoka)), pastel cards, candy buttons, "⭐ Red Eagle vs Blue Tiger ⭐" banners, sparkly move titles and a confetti win card |
-| Sounds | Roars, growls, heartbeats, bone crunches | Yays, ta-das, boings, giggles and bubbly pops |
+| Sounds | Roars, growls, heartbeats, bone crunches and a gong; a dark stone-hall reverb, with wind, crickets and crackling torches underneath | Yays, ta-das, boings, giggles, bubbly pops and a marimba hop; a small bright room, with a breeze and birdsong underneath |
 
 **Kids moves**
 
@@ -88,7 +88,7 @@ The throw is for fun only: the number is drawn fairly the moment the die leaves 
 - **Move:** click a glowing animal (hover shows where it will land).
 - **Clash:** mash any key or tap anywhere. Two players on one device: the attacker mashes A S D F (or taps the left half of the screen) and the defender mashes J K L (or the right half).
 - **Camera:** drag to orbit, scroll or pinch to zoom, 🎥 resets the view.
-- **1× / 2× / 3×** changes animation speed; during a kill, **⏩ Fast-forward** (or <kbd>Space</kbd>) speeds through it and skips the slow motion. 🔊 toggles sound.
+- **1× / 2× / 3×** changes animation speed; during a kill, **⏩ Fast-forward** (or <kbd>Space</kbd>) speeds through it and skips the slow motion. 🔊 toggles sound; **Background sounds** on the main menu turns the ambience on or off.
 
 Any seat can be **Human**, **CPU** or **Off** (2–4 players). Several humans can share one device and take turns.
 
@@ -122,7 +122,7 @@ Hosting serves the hashed `assets/` with a one-year immutable cache, while `inde
 - **Three.js** for rendering. Everything is procedural: the board, cages, key, chains, dice and all ten animals are built in code, with fur, stripes, scales and hide painted onto canvas textures at startup. There are no model or image assets.
 - Kill-cam post-processing: depth of field, a desaturated colour grade with vignette, film grain and a red impact flash, plus dramatic spot/red rim lighting during fights.
 - Gore: instanced blood droplets that splat into stains, spreading pools and drag smears, wounds stuck to the body, and dismemberment where torsos are split with clipping planes to show the flesh inside.
-- **WebAudio** synthesises every sound effect at runtime (roars, bone crunches, tearing flesh, chain rattles, dice clatter…).
+- **WebAudio** synthesises every sound effect at runtime (roars, bone crunches, tearing flesh, chain rattles, dice clatter…) from layered oscillators, FM (bells, metal), vowel formants (roars, howls, cheering kids) and filtered noise, through a generated reverb, stereo panning that follows the action on screen, and a compressor. The ambience loops are synthesised too.
 - **Vite** for dev server and bundling.
 
 ```
@@ -147,9 +147,12 @@ src/
   engine/dicePhysics.js  rigid-body tumble of the die, and fitting a throw to a fair roll
   render/world.js     renderer, lights, post-processing, camera moves, screen shake, Action/Kids looks
   render/scenery.js   Kids-mode sky dome, clouds, hills, trees, meadow and picnic cloth
+  render/arena.js     Action-mode night arena: sky, moon, stonework, braziers, embers, jungle
+  render/surfaces.js  wood grain and felt textures for the board frame and dice trays
   render/animalsKid.js  cute Kids-mode animals
   render/battlesKid.js  playful Kids-mode capture choreography and float home
   render/kidEffects.js  Kids-mode particle effects
+  engine/audio.js       sound engine (reverb, panning, formants, FM, ambience) and the Action sounds
   engine/kidSounds.js   Kids-mode sound effects (yay, tada, boing, bubble, squeak, giggle, poof)
   ui/hud.js           setup screen, mode switch, arena, HUD, banners
   ui/duelUI.js        the clash overlay: bar, mash pads, countdown, timer, result
