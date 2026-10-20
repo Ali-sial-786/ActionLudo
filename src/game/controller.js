@@ -672,7 +672,7 @@ export class GameController {
     const r0 = view.root.rotation.y;
     const r1 = Math.atan2(start.x - from.x, start.z - from.z);
     const kids = isKids();
-    this.sfx.play(kids ? 'yay' : 'roar', { pitch: 1.2 });
+    this.sfx.play('release', { animal: view.animal });
     await this.anim.tween(0.25, (k) => {
       view.root.rotation.y = lerpAngle(r0, r1, k);
       view.model.position.y = 0.07 - 0.05 * k;

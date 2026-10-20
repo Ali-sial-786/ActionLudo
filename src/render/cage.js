@@ -131,7 +131,7 @@ export class Cage {
       this.lock.rotation.x = k * 1.6;
       this.lock.scale.setScalar(1 - k);
     }, Ease.inQuad);
-    sfx?.play(this.kids ? 'bubble' : 'creak');
+    sfx?.play('cageLift');
     this.mat.transparent = true;
     await anim.tween(0.6, (k) => {
       this.group.position.y = this.home.y + Ease.inQuad(k) * 2.4;
@@ -175,7 +175,7 @@ export class Cage {
     shackle.position.y = 0.15;
     await anim.tween(0.2, (k) => this.lock.scale.setScalar(k), Ease.outBack);
     await anim.tween(0.12, (k) => (shackle.position.y = 0.15 - k * 0.065));
-    sfx?.play('unlock');
+    sfx?.play('lockSnap');
   }
 
   dispose() {
@@ -229,7 +229,7 @@ export async function unlockWithKey({ cage, anim, scene, fx, sfx, from }) {
   key.position.copy(start);
   key.scale.setScalar(0.01);
   scene.add(key);
-  sfx?.play('sparkle');
+  sfx?.play('keyIn');
   fx.sparks(start, 0xffe27a, 14, 2);
   await anim.tween(0.3, (k) => {
     key.scale.setScalar(0.01 + k * 1.8);
@@ -253,7 +253,7 @@ export async function unlockWithKey({ cage, anim, scene, fx, sfx, from }) {
   );
   trail();
   await anim.tween(0.18, (k) => key.position.lerpVectors(approach, hole.clone().add(new THREE.Vector3(0, 0, 0.07)), k), Ease.inQuad);
-  sfx?.play('click');
+  sfx?.play('keyTurn');
   await anim.tween(0.25, (k) => (key.rotation.z = k * (Math.PI / 2)), Ease.outBack);
   fx.sparks(hole, 0xffe27a, 16, 2.5);
   const openP = cage.open(anim, sfx);

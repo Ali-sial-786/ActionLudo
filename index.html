@@ -44,13 +44,13 @@
         <p id="setup-error" class="error"></p>
         <div class="toggles">
           <label class="toggle only-action"><input type="checkbox" id="opt-gore" checked /> <span>Blood &amp; gore</span></label>
-          <label class="toggle"><input type="checkbox" id="opt-ambience" checked /> <span>Background sounds</span></label>
         </div>
         <div class="actions">
           <button id="btn-start" class="btn primary"><span class="only-action">Start Game</span><span class="only-kids">▶ Let's Play!</span></button>
           <button id="btn-arena" class="btn"><span class="only-action">⚔ Battle Arena</span><span class="only-kids">🎪 Play Arena</span></button>
         </div>
         <details id="house-rules" class="rules house-rules"></details>
+        <details id="sound-settings" class="rules sound-settings"></details>
         <details class="rules">
           <summary>How to play</summary>
           <ul class="only-action">
@@ -104,6 +104,7 @@
         </div>
       </div>
       <div id="quit-confirm" class="quit-confirm" role="dialog" aria-labelledby="quit-q" hidden>
+        <details id="sound-ingame" class="sound-ingame"></details>
         <p id="quit-q">Quit this game and go back to the menu?</p>
         <div class="quit-actions">
           <button id="btn-quit-yes" class="btn small primary">Quit</button>

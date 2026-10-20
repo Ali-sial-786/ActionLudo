@@ -5,6 +5,7 @@ import { Effects } from './render/effects.js';
 import { Dice } from './render/dice.js';
 import { GameController } from './game/controller.js';
 import { Hud } from './ui/hud.js';
+import { SoundPanel } from './ui/soundPanel.js';
 import { sfx } from './engine/audio.js';
 import { goreSettings } from './render/gore.js';
 import { initialMode, normalizeMode, saveMode, settings } from './settings.js';
@@ -91,7 +92,6 @@ const hud = new Hud({
   },
   onMenu: () => toMenu(),
   onGore: (on) => (goreSettings.enabled = on && settings.mode !== 'kids'),
-  onAmbience: (on) => sfx.setAmbience(on),
   onMode: (mode) => {
     sfx.unlock();
     if (normalizeMode(mode) === settings.mode) return;
@@ -101,6 +101,8 @@ const hud = new Hud({
 });
 
 controller = new GameController({ world, board, fx, dice, sfx, hud });
+// Volume sliders per group of sounds, on the main menu and in the in-game menu.
+const soundPanel = new SoundPanel([document.getElementById('sound-settings'), document.getElementById('sound-ingame')], sfx);
 
 // Switch between Action and Kids mode from the menu: re-theme the page and the 3D scene,
 // re-render the menu copy and rebuild the preview pieces with the matching animal style.
@@ -130,6 +132,7 @@ function applyMode() {
   board.setTheme(mode);
   dice.setTheme(mode);
   hud.setMode(mode);
+  soundPanel.render();
 }
 
 function toMenu() {

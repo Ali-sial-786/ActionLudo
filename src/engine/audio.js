@@ -1,16 +1,43 @@
-// Procedural sound effects built on WebAudio. No assets required.
+// Sound effects on WebAudio: recorded samples (CC0, in src/sounds) layered with synthesis.
 //
 // Every voice runs through one bus: an optional per-voice drive (waveshaper) and stereo position,
-// a reverb send (a generated room: a dark stone hall for Action, a small bright room for Kids),
-// then a gentle compressor and the master volume. A quiet ambience loop (a night jungle, or a
-// sunny garden) plays underneath.
+// its group's volume, a reverb send (a generated room: a dark stone hall for Action, a small
+// bright room for Kids), then a gentle compressor and the master volume. A quiet ambience loop
+// (a night jungle, or a sunny garden) plays underneath.
 
 const VOLUME = 0.7;
 
 const MODES = {
-  action: { wet: 0.2, room: { len: 2.6, decay: 2.2, damp: 0.82, pre: 0.022 }, ambience: 0.55 },
-  kids: { wet: 0.13, room: { len: 1.0, decay: 0.75, damp: 0.3, pre: 0.008 }, ambience: 0.8 },
+  action: { wet: 0.2, room: { len: 2.6, decay: 2.2, damp: 0.82, pre: 0.022 }, ambience: 0.3 },
+  kids: { wet: 0.13, room: { len: 1.0, decay: 0.75, damp: 0.3, pre: 0.008 }, ambience: 0.4 },
 };
+
+// Sound groups, each with its own volume (the Sound settings). A sound belongs to the group
+// listed here, or to 'fight'; a call can override it with opt.group.
+export const SOUND_GROUPS = ['fight', 'cage', 'dice', 'move', 'music', 'ambience'];
+const DEFAULT_VOLUMES = { master: 1, fight: 1, cage: 1, dice: 1, move: 1, music: 1, ambience: 0.6 };
+const GROUP_OF = {
+  keyIn: 'cage', keyTurn: 'cage', unlock: 'cage', cageLift: 'cage', release: 'cage', lockSnap: 'cage', clank: 'cage', chain: 'cage', creak: 'cage', // prettier-ignore
+  diceShake: 'dice', diceRattle: 'dice', diceHit: 'dice', diceWall: 'dice', diceSettle: 'dice', diceSix: 'dice', // prettier-ignore
+  hop: 'move', land: 'move', // prettier-ignore
+  click: 'music', fanfare: 'music', cheer: 'music', sad: 'music', error: 'music', tada: 'music', yay: 'music', sparkle: 'music', // prettier-ignore
+};
+
+// Recorded samples, named <kind>_<n>.mp3: a kind can have several variants, picked at random.
+// Decoded buffers aren't tied to a context, so they're shared by the live and offline contexts.
+const SAMPLE_FILES = import.meta.glob('../sounds/*.mp3', { query: '?url', import: 'default', eager: true });
+const decoded = new Map();
+let samplesLoading = null;
+
+async function fetchBytes(url) {
+  if (url.startsWith('data:')) {
+    const bin = atob(url.slice(url.indexOf(',') + 1));
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes.buffer;
+  }
+  return (await fetch(url)).arrayBuffer();
+}
 
 // Small seeded generator, so building buffers never draws on Math.random (the game's dice and AI
 // may be replayed from a seed).
@@ -121,57 +148,79 @@ function makeLoop(ctx, seconds, bed, events) {
   return buf;
 }
 
-// Action: a warm night outdoors. Wind through the trees, crickets, the torches' crackle and a
-// low, uneasy drone.
-function nightAmbience(ctx, rand) {
+// Action: a night in the jungle. Crickets, frogs, an owl now and then and the torches' crackle.
+// There is no broadband noise bed (slow noise swells read as ocean waves). With a recorded
+// night bed (`bed`), only the torch crackle is synthesised on top of it.
+function nightAmbience(ctx, rand, bed) {
   const S = 12;
   const tau = Math.PI * 2;
-  const lr = [0, 0].map(() => ({ lo: 0, lo2: 0, hi: 0, hb: 0, hi2: 0 }));
+  const sr = ctx.sampleRate;
   return makeLoop(
     ctx,
     S,
-    (t) => {
-      // gusts swell and fade (periodic in S, so the loop is seamless)
-      const gust = 0.55 + 0.3 * Math.sin((tau * t) / S + 1.2) + 0.15 * Math.sin((tau * 3 * t) / S);
-      const drone = 0.006 * Math.sin(tau * 49 * t) * (0.6 + 0.4 * Math.sin((tau * t) / S)) + 0.004 * Math.sin(tau * 73.5 * t);
-      return lr.map((c) => {
-        const w = rand() * 2 - 1;
-        // wind: a low band of noise whose top opens with the gust...
-        c.lo += (0.012 + 0.03 * gust) * (w - c.lo);
-        c.lo2 += 0.004 * (c.lo - c.lo2);
-        // ...and leaves rustling in the trees (a band of a few hundred Hz to ~2 kHz)
-        c.hi += 0.2 * (w - c.hi);
-        c.hb += 0.2 * (c.hi - c.hb);
-        c.hi2 += 0.04 * (c.hb - c.hi2);
-        return (c.lo - c.lo2) * 0.5 * gust + (c.hb - c.hi2) * 0.05 * gust * gust + drone;
-      });
-    },
+    () => [0, 0],
     (add) => {
-      // two crickets, each chirping in bursts of three pulses
-      for (const [f, pan, every] of [
-        [4400, -0.65, 0.78],
-        [5150, 0.55, 1.05],
-      ]) {
-        for (let at = rand() * every; at < S; at += every * (0.85 + rand() * 0.3)) {
-          if (rand() < 0.18) at += 1.5 + rand() * 2; // a pause now and then
-          const vol = 0.035 + rand() * 0.015;
-          add(at, 0.11, (t) => {
-            const pulse = Math.floor(t / 0.032);
-            const u = t - pulse * 0.032;
-            return pulse < 3 && u < 0.018 ? vol * Math.sin(tau * f * t) * Math.sin((Math.PI * u) / 0.018) : 0;
-          }, pan);
+      if (!bed) {
+        // a chorus of crickets, each chirping in bursts of pulses at its own pitch and pace
+        for (const [f, pan, every, pulses] of [
+          [4300, -0.7, 0.62, 3],
+          [4750, 0.6, 0.84, 4],
+          [5200, -0.2, 0.5, 2],
+          [3900, 0.3, 1.1, 5],
+        ]) {
+          for (let at = rand() * every; at < S; at += every * (0.9 + rand() * 0.2)) {
+            if (rand() < 0.12) at += 1 + rand() * 1.5;
+            const vol = 0.036 + rand() * 0.024;
+            add(at, pulses * 0.034, (t) => {
+              const k = Math.floor(t / 0.034);
+              const u = t - k * 0.034;
+              return u < 0.02 ? vol * Math.sin(tau * f * t) * Math.sin((Math.PI * u) / 0.02) : 0;
+            }, pan);
+          }
+        }
+        // frogs: short buzzy croaks, often in pairs
+        for (const [f, pan, every] of [
+          [420, -0.5, 2.6],
+          [610, 0.55, 3.4],
+        ]) {
+          for (let at = rand() * every; at < S - 0.5; at += every * (0.7 + rand() * 0.6)) {
+            const n = rand() < 0.6 ? 2 : 1;
+            for (let c = 0; c < n; c++) {
+              const len = 0.14 + rand() * 0.08;
+              const pulse = 38 + rand() * 12;
+              const vol = 0.08 + rand() * 0.04;
+              add(at + c * (len + 0.07), len, (t) => {
+                const env = Math.sin((Math.PI * t) / len);
+                const buzz = Math.max(0, Math.sin(tau * pulse * t)) ** 3;
+                return vol * env * buzz * (Math.sin(tau * f * t) + 0.5 * Math.sin(tau * f * 2.03 * t));
+              }, pan);
+            }
+          }
+        }
+        // a distant owl, once a loop: "hoo ... hoo-hoo"
+        const owlAt = 3 + rand() * 4;
+        for (const [off, len] of [
+          [0, 0.42],
+          [0.75, 0.22],
+          [1.05, 0.38],
+        ]) {
+          let ph = 0;
+          add(owlAt + off, len, (t) => {
+            ph += (tau * (370 - 30 * (t / len))) / sr;
+            return 0.06 * Math.sin(ph) * Math.sin((Math.PI * t) / len) ** 2;
+          }, -0.35);
         }
       }
-      // torch crackle: short dry ticks, the odd bigger pop
-      for (let at = 0; at < S; at += rand() * 0.35) {
-        const big = rand() < 0.08;
-        const vol = big ? 0.07 + rand() * 0.05 : 0.012 + rand() * 0.03;
-        const decay = big ? 0.006 : 0.0015 + rand() * 0.002;
-        const pan = rand() * 1.6 - 0.8;
+      // torch crackle: short dry ticks and the odd pop
+      for (let at = 0; at < S; at += 0.05 + rand() * 0.45) {
+        const big = rand() < 0.07;
+        const vol = big ? 0.07 + rand() * 0.04 : 0.014 + rand() * 0.026;
+        const decay = big ? 0.005 : 0.0012 + rand() * 0.0018;
+        const pan = rand() * 1.4 - 0.7;
         let prev = 0;
         add(at, decay * 6, (t) => {
           const x = rand() * 2 - 1;
-          const hp = x - prev; // crude highpass keeps it crisp
+          const hp = x - prev;
           prev = x;
           return hp * vol * Math.exp(-t / decay);
         }, pan);
@@ -180,26 +229,31 @@ function nightAmbience(ctx, rand) {
   );
 }
 
-// Kids: a sunny garden. A soft breeze and little birds.
-function dayAmbience(ctx, rand) {
+// Kids: a sunny garden. Little birds and the odd passing bee (no breeze noise). With a recorded
+// birdsong bed (`bed`), only the bee is synthesised on top of it.
+function dayAmbience(ctx, rand, bed) {
   const S = 12;
   const tau = Math.PI * 2;
-  let bl = 0, br = 0; // prettier-ignore
   return makeLoop(
     ctx,
     S,
-    (t) => {
-      const swell = 0.6 + 0.4 * Math.sin((tau * t) / S + 0.5);
-      bl += 0.035 * (rand() * 2 - 1 - bl);
-      br += 0.035 * (rand() * 2 - 1 - br);
-      return [bl * 0.11 * swell, br * 0.11 * swell];
-    },
+    () => [0, 0],
     (add) => {
+      // a bee drifting past, once a loop
+      const beeAt = 2 + rand() * 6;
+      const beePan = rand() < 0.5 ? -0.6 : 0.6;
+      add(beeAt, 1.6, (t) => {
+        const env = Math.sin((Math.PI * t) / 1.6) ** 2;
+        const f = 218 + 12 * Math.sin(tau * 3 * t);
+        const saw = 2 * ((f * t) % 1) - 1;
+        return 0.03 * env * saw * (0.7 + 0.3 * Math.sin(tau * 9 * t));
+      }, beePan);
+      if (bed) return;
       // a little songbird phrase every couple of seconds, each from somewhere else
       for (let at = 0.4 + rand(); at < S - 0.5; at += 1.4 + rand() * 2.2) {
         const pan = rand() * 1.6 - 0.8;
         const kind = Math.floor(rand() * 3);
-        const vol = 0.035 + rand() * 0.025;
+        const vol = 0.09 + rand() * 0.05;
         if (kind === 0) {
           // "tee-oo" whistle
           for (const [off, f0, f1, len] of [
@@ -243,6 +297,8 @@ class Sfx {
     this.mode = 'action';
     this.ambienceOn = true;
     this.basePan = 0;
+    this.group = 'fight';
+    this.volumes = { ...DEFAULT_VOLUMES };
   }
 
   get kids() {
@@ -259,7 +315,7 @@ class Sfx {
         if (document.hidden) this.ctx.suspend?.();
         else this.ctx.resume?.();
       });
-      setTimeout(() => this.updateAmbience(), 50);
+      this.loadSamples().finally(() => this.updateAmbience());
     }
     if (this.ctx.state === 'suspended') this.ctx.resume();
   }
@@ -267,10 +323,12 @@ class Sfx {
   // Builds the bus on a context (a live AudioContext, or an OfflineAudioContext to render to file).
   attach(ctx) {
     this.ctx = ctx;
+    this.volumes ??= { ...DEFAULT_VOLUMES };
+    this.group ??= 'fight';
     const rand = mulberry32(0x5eed);
     this.noiseBuffers = { white: noiseBuffer(ctx, 'white', rand), pink: noiseBuffer(ctx, 'pink', rand), brown: noiseBuffer(ctx, 'brown', rand) };
     this.master = ctx.createGain();
-    this.master.gain.value = this.muted ? 0 : VOLUME;
+    this.master.gain.value = this.muted ? 0 : VOLUME * this.volumes.master;
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -14;
     comp.knee.value = 10;
@@ -292,8 +350,62 @@ class Sfx {
       return this.verbs[mode];
     };
     this.verbIn.connect(this.verbFor(this.mode));
+    // one dry gain and one reverb-send gain per sound group, so a group's volume covers its echo too
+    this.groups = {};
+    for (const g of SOUND_GROUPS) {
+      const dry = ctx.createGain();
+      const send = ctx.createGain();
+      dry.gain.value = send.gain.value = this.volumes[g];
+      dry.connect(this.bus);
+      send.connect(this.verbIn);
+      this.groups[g] = { dry, send };
+    }
     this.ambBuffers = {};
     this.amb = null;
+  }
+
+  // Decodes every recorded sample once (sounds fall back to pure synthesis until they're ready).
+  loadSamples() {
+    if (samplesLoading) return samplesLoading;
+    const ctx = this.ctx;
+    const entries = Object.entries(SAMPLE_FILES).sort(([a], [b]) => (a < b ? -1 : 1));
+    samplesLoading = Promise.all(
+      entries.map(async ([path, url]) => {
+        try {
+          return [path, await ctx.decodeAudioData(await fetchBytes(url))];
+        } catch {
+          return [path, null]; // a sample that can't load leaves its synthesised fallback
+        }
+      }),
+    ).then((list) => {
+      for (const [path, buf] of list) {
+        if (!buf) continue;
+        const kind = path.split('/').pop().replace(/\.mp3$/, '').replace(/_\d+$/, '');
+        if (!decoded.has(kind)) decoded.set(kind, []);
+        decoded.get(kind).push(buf);
+      }
+    });
+    return samplesLoading;
+  }
+
+  has(kind) {
+    return decoded.has(kind);
+  }
+
+  // Volume of one group (or 'master'), 0..1.
+  setVolume(key, v) {
+    this.volumes[key] = Math.max(0, Math.min(1, v));
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    if (key === 'master') {
+      if (!this.muted) this.master.gain.setTargetAtTime(VOLUME * this.volumes.master, t, 0.03);
+      return;
+    }
+    const g = this.groups[key];
+    if (!g) return;
+    g.dry.gain.setTargetAtTime(this.volumes[key], t, 0.03);
+    g.send.gain.setTargetAtTime(this.volumes[key], t, 0.03);
+    if (key === 'ambience') this.updateAmbience();
   }
 
   setMode(mode) {
@@ -311,11 +423,17 @@ class Sfx {
     this.updateAmbience();
   }
 
+  // The ambience loop for a mode: a recorded bed when there is one (plus synthesised details),
+  // otherwise fully synthesised.
+  ambienceBuffer(mode) {
+    return (this.ambBuffers[mode] ??= (mode === 'kids' ? dayAmbience : nightAmbience)(this.ctx, mulberry32(mode === 'kids' ? 23 : 29), decoded.get(mode === 'kids' ? 'amb_day' : 'amb_night')?.[0]));
+  }
+
   // Cross-fades to the current mode's ambience loop (or to silence).
   updateAmbience() {
     const ctx = this.ctx;
     if (!ctx || !this.bus) return;
-    const want = this.ambienceOn ? this.mode : null;
+    const want = this.ambienceOn && this.volumes.ambience > 0 ? this.mode : null;
     if ((this.amb?.mode ?? null) === want) return;
     const t = ctx.currentTime;
     if (this.amb) {
@@ -327,16 +445,26 @@ class Sfx {
       this.amb = null;
     }
     if (!want) return;
-    this.ambBuffers[want] ??= (want === 'kids' ? dayAmbience : nightAmbience)(ctx, mulberry32(want === 'kids' ? 23 : 29));
-    const src = ctx.createBufferSource();
-    src.buffer = this.ambBuffers[want];
-    src.loop = true;
     const gain = ctx.createGain();
     gain.gain.setValueAtTime(0, t);
     gain.gain.linearRampToValueAtTime(MODES[want].ambience, t + 2.5);
-    src.connect(gain).connect(this.bus);
-    src.start(t);
-    this.amb = { mode: want, src, gain };
+    gain.connect(this.groups.ambience.dry);
+    const sources = [this.ambienceBuffer(want), decoded.get(want === 'kids' ? 'amb_day' : 'amb_night')?.[0]]
+      .filter(Boolean)
+      .map((buffer, i) => {
+        const src = ctx.createBufferSource();
+        src.buffer = buffer;
+        src.loop = true;
+        if (i) {
+          // the recorded bed sits a little under the effects
+          const bed = ctx.createGain();
+          bed.gain.value = 0.55;
+          src.connect(bed).connect(gain);
+        } else src.connect(gain);
+        src.start(t);
+        return src;
+      });
+    this.amb = { mode: want, src: { stop: (at) => sources.forEach((x) => x.stop(at)) }, gain };
   }
 
   setMuted(m) {
@@ -344,7 +472,7 @@ class Sfx {
     if (!this.master) return;
     const t = this.ctx.currentTime;
     this.master.gain.cancelScheduledValues(t);
-    this.master.gain.setTargetAtTime(m ? 0 : VOLUME, t, 0.03);
+    this.master.gain.setTargetAtTime(m ? 0 : VOLUME * this.volumes.master, t, 0.03);
   }
 
   get ready() {
@@ -415,13 +543,56 @@ class Sfx {
       if (panTo !== null) p.pan.linearRampToValueAtTime(clamp(this.basePan + panTo, -1, 1), t0 + dur);
       n = n.connect(p);
     }
-    n.connect(this.bus);
+    const group = this.groups[this.group] ?? this.groups.fight;
+    n.connect(group.dry);
     const w = wet ?? MODES[this.mode].wet;
     if (w > 0) {
       const send = ctx.createGain();
       send.gain.value = w;
-      n.connect(send).connect(this.verbIn);
+      n.connect(send).connect(group.send);
     }
+  }
+
+  /**
+   * A recorded sample: a random variant of `kind` (or `variant`), at `vol`, `rate` (speed and
+   * pitch), from `start` s, optionally cut to `dur` s with a fade, and filtered (`lp`, `hp`), plus
+   * the routing options of tone(). Returns false when the kind isn't loaded (yet), so callers can
+   * fall back to synthesis.
+   */
+  sample(kind, o = {}) {
+    if (!this.ready) return false;
+    const list = decoded.get(kind);
+    if (!list?.length) return false;
+    const { vol = 0.5, rate = 1, delay = 0, start = 0, dur = null, lp = 0, hp = 0 } = o;
+    const buf = list[(o.variant ?? Math.floor(Math.random() * list.length)) % list.length];
+    const ctx = this.ctx;
+    const t0 = ctx.currentTime + Math.max(0, delay);
+    const len = Math.max(0.02, dur ?? (buf.duration - start) / rate);
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.playbackRate.value = rate;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(vol, t0);
+    if (dur) {
+      g.gain.setValueAtTime(vol, t0 + len * 0.75);
+      g.gain.linearRampToValueAtTime(0, t0 + len);
+    }
+    let n = src;
+    for (const [type, freq] of [
+      ['highpass', hp],
+      ['lowpass', lp],
+    ]) {
+      if (!freq) continue;
+      const f = ctx.createBiquadFilter();
+      f.type = type;
+      f.frequency.value = freq;
+      n = n.connect(f);
+    }
+    n.connect(g);
+    this.route(g, t0, t0 + len + 0.05, { ...o, dur: len });
+    src.start(t0, start);
+    src.stop(t0 + len + 0.05);
+    return true;
   }
 
   /**
@@ -544,10 +715,12 @@ class Sfx {
     const fn = SOUNDS[name];
     if (!fn) return;
     this.basePan = clamp(opt.pan ?? 0, -1, 1);
+    this.group = opt.group ?? GROUP_OF[name] ?? 'fight';
     try {
       fn(this, opt);
     } finally {
       this.basePan = 0;
+      this.group = 'fight';
     }
   }
 }
@@ -625,6 +798,24 @@ function paw(s, { vol = 0.2, delay = 0, pan = 0, low = 1 } = {}) {
 function wetSlap(s, { delay = 0, vol = 0.35, f = 380, toF = 1000, dur = 0.18, pan = 0 } = {}) {
   s.noise({ dur, vol, filter: 'bandpass', freq: f, to: toF, q: 7, delay, pan, attack: 0.004 });
   s.noise({ color: 'brown', dur: dur * 0.7, vol: vol * 0.8, filter: 'lowpass', freq: 700, to: 200, delay, pan });
+}
+
+// Each animal's own call: a recording when there is one, else its synthesised voice.
+const CALLS = {
+  tiger: ['roar_bigcat', 1.05, 'roar'],
+  wolf: ['snarl_wolf', 1, 'growl'],
+  bear: ['roar_bear', 1, 'roar'],
+  eagle: ['screech_eagle', 1, 'screech'],
+  cobra: ['hiss_snake', 1, 'hiss'],
+  shark: ['growl_bigcat', 0.7, 'growl'],
+  gorilla: ['roar_gorilla', 1, 'roar'],
+  rhino: ['snort_bull', 1, 'snort'],
+  scorpion: ['hiss_snake', 1.5, 'hiss'],
+  crocodile: ['hiss_croc', 1, 'hiss'],
+};
+function animalCall(s, animal, vol = 0.6) {
+  const [kind, rate, synth] = CALLS[animal] ?? CALLS.tiger;
+  if (!s.sample(kind, { vol, rate, dur: 1.6, wet: 0.25 })) SOUNDS[synth](s, { pitch: 1.1 });
 }
 
 // Pentatonic scale for pitched game feedback.
@@ -712,50 +903,52 @@ const SOUNDS = {
   // ------------------------------------------------ the clash mini-game
   // one shove; each side has its own pitch and side of the stereo field
   clash: (s, { side = 1, power = 1 } = {}) => {
-    const pan = -0.4 * side;
+    const pan = -0.45 * side;
     if (s.kids) {
-      const f = side > 0 ? 330 : 262;
-      s.tone({ type: 'triangle', freq: f * rnd(0.96, 1.04), to: f * 1.6, dur: 0.1, vol: 0.22 * power, pan, wet: 0.1 });
-      s.noise({ dur: 0.03, vol: 0.08 * power, filter: 'bandpass', freq: 2200, q: 2, pan });
+      // a cushiony "pomf" and a tiny squeak
+      if (!s.sample('soft', { vol: 0.5 * power, rate: rnd(1.35, 1.6), pan, wet: 0.08 })) s.tone({ type: 'triangle', freq: 300, to: 480, dur: 0.1, vol: 0.2 * power, pan });
+      const f = (side > 0 ? 880 : 740) * rnd(0.97, 1.03);
+      s.tone({ type: 'triangle', freq: f, to: f * 1.25, dur: 0.06, vol: 0.045, pan, attack: 0.004 });
       return;
     }
-    const f = side > 0 ? 140 : 108;
-    s.tone({ freq: f * rnd(0.95, 1.05), to: f * 0.45, dur: 0.14, vol: 0.34 * power, pan, attack: 0.002, wet: 0.1 });
-    s.noise({ color: 'pink', dur: 0.06, vol: 0.22 * power, filter: 'bandpass', freq: side > 0 ? 1500 : 1100, q: 1.4, pan, attack: 0.001 });
-    s.noise({ color: 'brown', dur: 0.12, vol: 0.2 * power, filter: 'lowpass', freq: 400, pan });
+    // a real body blow, pitched a little apart for each side, with some weight underneath
+    if (!s.sample('punch', { vol: 0.5 * power, rate: (side > 0 ? 1.04 : 0.92) * rnd(0.95, 1.05), pan, wet: 0.12 })) {
+      s.noise({ color: 'pink', dur: 0.06, vol: 0.22 * power, filter: 'bandpass', freq: 1300, q: 1.4, pan, attack: 0.001 });
+    }
+    s.tone({ freq: side > 0 ? 95 : 80, to: 45, dur: 0.12, vol: 0.2 * power, pan, attack: 0.002, wet: 0.05 });
+    if (Math.random() < 0.35) s.sample('scuffle', { vol: 0.16, rate: rnd(0.9, 1.2), pan: -pan * 0.5, dur: 0.25 });
   },
   clashGo: (s) => {
     if (s.kids) {
-      // a referee's whistle and a cymbal "tsss"
-      s.tone({ freq: 2350, dur: 0.32, vol: 0.09, vibrato: 90, vibRate: 32, attack: 0.01, hold: 0.7 });
-      s.tone({ freq: 2800, dur: 0.32, vol: 0.03, vibrato: 110, vibRate: 32, attack: 0.01, hold: 0.7 });
-      SOUNDS.boing(s, { pitch: 1.3, delay: 0.05 });
-      s.noise({ dur: 0.6, vol: 0.08, filter: 'highpass', freq: 7000, attack: 0.003, delay: 0.02, wet: 0.3 });
+      // a referee's whistle and a soft bump
+      s.tone({ freq: 2350, dur: 0.32, vol: 0.08, vibrato: 90, vibRate: 32, attack: 0.01, hold: 0.7 });
+      s.tone({ freq: 2800, dur: 0.32, vol: 0.025, vibrato: 110, vibRate: 32, attack: 0.01, hold: 0.7 });
+      s.sample('soft', { vol: 0.5, rate: 1.2, delay: 0.05 });
       return;
     }
-    // a struck gong and a sub drop
-    metal(s, { f: 98, vol: 0.2, dur: 2.2, ratio: 1.41, index: 4, wet: 0.45 });
-    metal(s, { f: 247, vol: 0.08, dur: 1.4, ratio: 2.76, index: 2, wet: 0.45 });
-    s.tone({ freq: 80, to: 36, dur: 0.6, vol: 0.55, dist: 2, attack: 0.002 });
-    s.noise({ color: 'pink', dur: 0.4, vol: 0.25, filter: 'bandpass', freq: 600, to: 3000, q: 1.1, attack: 0.003 });
+    // a heavy blow, a deep bell and a snarl
+    s.sample('punch_heavy', { vol: 0.75, rate: 0.75, wet: 0.3 });
+    if (!s.sample('bell_heavy', { vol: 0.32, rate: 0.5, wet: 0.45, lp: 2500 })) metal(s, { f: 98, vol: 0.18, dur: 2, ratio: 1.41, index: 4, wet: 0.45 });
+    s.tone({ freq: 70, to: 34, dur: 0.6, vol: 0.45, attack: 0.002 });
+    s.sample('growl_bigcat', { vol: 0.4, dur: 0.9, delay: 0.08, wet: 0.25 });
   },
-
   // ------------------------------------------------ impacts
   thud: (s, { power = 1, delay = 0 } = {}) => {
-    s.tone({ freq: 120, to: 34, dur: 0.5, vol: 0.7 * power, dist: 3, delay, attack: 0.002, wet: 0.15 });
-    s.noise({ color: 'brown', dur: 0.4, vol: 0.55 * power, freq: 900, to: 90, delay, wet: 0.2 });
-    s.noise({ color: 'pink', dur: 0.03, vol: 0.18 * power, filter: 'bandpass', freq: 1600, q: 1, delay, attack: 0.001 });
+    if (!s.sample('body', { vol: 0.8 * power, rate: rnd(0.82, 0.95), delay, wet: 0.18 })) {
+      s.noise({ color: 'brown', dur: 0.4, vol: 0.55 * power, freq: 900, to: 90, delay, wet: 0.2 });
+    }
+    s.tone({ freq: 110, to: 34, dur: 0.45, vol: 0.5 * power, delay, attack: 0.002, wet: 0.12 });
   },
   boom: (s) => {
-    s.tone({ freq: 85, to: 28, dur: 1.3, vol: 0.7, hold: 0.1, dist: 2, wet: 0.3 });
-    s.noise({ color: 'brown', dur: 1.5, vol: 0.6, freq: 2400, to: 60, wet: 0.4 });
-    s.noise({ dur: 0.3, vol: 0.28, freq: 6000, to: 500, attack: 0.001 });
+    s.sample('punch_heavy', { vol: 0.8, rate: 0.55, wet: 0.35 });
+    s.sample('body', { vol: 0.7, rate: 0.5, wet: 0.35 });
+    s.tone({ freq: 80, to: 28, dur: 1.2, vol: 0.55, hold: 0.1, wet: 0.3 });
+    s.noise({ color: 'brown', dur: 1.3, vol: 0.4, freq: 1800, to: 60, wet: 0.4 });
   },
   drum: (s, { delay = 0, power = 1 } = {}) => {
-    // a taiko: a deep skin with a slap on top
-    s.tone({ freq: 120, to: 52, dur: 0.38, vol: 0.5 * power, delay, attack: 0.002, wet: 0.3 });
-    s.tone({ freq: 210, to: 130, dur: 0.1, vol: 0.12 * power, delay, attack: 0.001 });
-    s.noise({ color: 'pink', dur: 0.05, vol: 0.18 * power, filter: 'bandpass', freq: 900, q: 1.2, delay, attack: 0.001, wet: 0.3 });
+    // a war drum: a deep body hit with a skin slap
+    if (!s.sample('body', { vol: 0.65 * power, rate: 0.72, delay, wet: 0.3 })) s.tone({ freq: 210, to: 130, dur: 0.1, vol: 0.12 * power, delay, attack: 0.001 });
+    s.tone({ freq: 115, to: 52, dur: 0.36, vol: 0.4 * power, delay, attack: 0.002, wet: 0.3 });
   },
   dunDun: (s) => {
     // two low brass stabs, the second a half step higher
@@ -775,17 +968,16 @@ const SOUNDS = {
     s.tone({ type: 'sawtooth', freq: 220, to: 48, dur: 1.2, vol: 0.06, lp: 1200, lpTo: 150, detune: 12, wet: 0.5 });
   },
   heartbeat: (s) => {
-    // lub-dub, with an overtone so small speakers can hear it
+    // lub-dub: two muffled body thumps, with an overtone so small speakers can hear it
     for (const [at, v] of [
       [0, 1],
-      [0.24, 0.75],
+      [0.24, 0.72],
     ]) {
-      s.tone({ freq: 62, to: 40, dur: 0.2, vol: 0.55 * v, delay: at, attack: 0.008, wet: 0.05 });
-      s.tone({ freq: 130, to: 85, dur: 0.12, vol: 0.12 * v, delay: at, attack: 0.008 });
-      s.noise({ color: 'brown', dur: 0.12, vol: 0.25 * v, freq: 300, to: 80, delay: at });
+      if (!s.sample('body', { vol: 0.5 * v, rate: 0.5, lp: 420, delay: at, wet: 0.05 })) s.noise({ color: 'brown', dur: 0.12, vol: 0.25 * v, freq: 300, to: 80, delay: at });
+      s.tone({ freq: 58, to: 40, dur: 0.18, vol: 0.3 * v, delay: at, attack: 0.008 });
+      s.tone({ freq: 125, to: 85, dur: 0.1, vol: 0.08 * v, delay: at, attack: 0.008 });
     }
   },
-
   // ------------------------------------------------ gore (Action)
   rip: (s) => {
     SOUNDS.tear(s);
@@ -794,29 +986,34 @@ const SOUNDS = {
   },
   slash: (s, { delay = 0 } = {}) => {
     const dir = Math.random() < 0.5 ? -1 : 1;
-    // the swipe, a glint of claw, then the cut
-    s.noise({ dur: 0.13, vol: 0.4, filter: 'bandpass', freq: 5200, to: 1200, q: 1.6, delay, attack: 0.03, pan: -0.5 * dir, panTo: 0.5 * dir });
-    s.tone({ freq: 3400, to: 2900, dur: 0.18, vol: 0.025, fm: 1.5, fmRatio: 2.76, delay: delay + 0.03, wet: 0.3 });
-    SOUNDS.squelch(s, { delay: delay + 0.05 });
+    // claws through the air, then the cut
+    if (!s.sample('swipe', { vol: 0.55, rate: rnd(0.95, 1.1), delay, pan: 0.3 * dir, wet: 0.2 })) {
+      s.noise({ dur: 0.13, vol: 0.4, filter: 'bandpass', freq: 5200, to: 1200, q: 1.6, delay, attack: 0.03, pan: -0.5 * dir, panTo: 0.5 * dir });
+    }
+    s.sample('blade', { vol: 0.18, rate: 1.3, delay: delay + 0.02 });
+    SOUNDS.squelch(s, { delay: delay + 0.06 });
   },
   crunch: (s, { delay = 0 } = {}) => {
-    // bone: a sharp crack and a burst of splintering ticks over a dull thump
-    s.noise({ dur: 0.03, vol: 0.5, filter: 'highpass', freq: 1500, delay, attack: 0.001 });
-    const n = 6 + Math.floor(Math.random() * 4);
-    for (let i = 0; i < n; i++) tick(s, { f: rnd(1200, 4200), vol: rnd(0.25, 0.5), q: rnd(3, 7), dur: rnd(0.02, 0.04), delay: delay + 0.01 + i * rnd(0.018, 0.032), pan: rnd(-0.2, 0.2) });
-    s.tone({ freq: 130, to: 45, dur: 0.24, vol: 0.5, delay, attack: 0.002 });
-    s.noise({ color: 'brown', dur: 0.2, vol: 0.3, freq: 500, to: 120, delay });
+    // bone giving way: a crack, splintering, a dull blow
+    if (!s.sample('crack_bone', { vol: 0.75, rate: rnd(0.9, 1.1), delay })) {
+      s.sample('chop', { vol: 0.6, rate: 0.8, delay });
+      s.sample('chop', { vol: 0.4, rate: 1.25, delay: delay + 0.045 });
+    }
+    s.sample('punch_heavy', { vol: 0.35, rate: 1.2, delay });
+    s.tone({ freq: 120, to: 45, dur: 0.2, vol: 0.35, delay, attack: 0.002 });
   },
   tear: (s, { delay = 0 } = {}) => {
-    // flesh ripping: a rough, gritty sweep made of many tiny overlapping grains
-    s.noise({ color: 'pink', dur: 0.5, vol: 0.38, filter: 'bandpass', freq: 600, to: 2400, q: 1, delay, dist: 6, am: 38, amDepth: 0.45 });
-    for (let i = 0; i < 12; i++) s.noise({ dur: rnd(0.02, 0.05), vol: rnd(0.12, 0.28), filter: 'bandpass', freq: rnd(400, 1400), q: 5, delay: delay + i * 0.035 + rnd(0, 0.02) });
-    wetSlap(s, { delay: delay + 0.3, vol: 0.2, f: 900, toF: 400 });
+    // hide ripping: a slow, rough drag with a wet tail
+    if (!s.sample('scuffle', { vol: 0.55, rate: 0.55, delay, dur: 0.55, lp: 2600 })) {
+      s.noise({ color: 'pink', dur: 0.5, vol: 0.3, filter: 'bandpass', freq: 600, to: 2400, q: 1, delay, am: 38, amDepth: 0.45 });
+    }
+    s.noise({ color: 'pink', dur: 0.4, vol: 0.12, filter: 'bandpass', freq: 900, to: 1800, q: 1.2, delay: delay + 0.05, am: 31, amDepth: 0.4 });
+    SOUNDS.squelch(s, { delay: delay + 0.3 });
   },
   squelch: (s, { delay = 0 } = {}) => {
-    wetSlap(s, { delay, vol: 0.38, f: 360, toF: 1100, dur: 0.17 });
-    wetSlap(s, { delay: delay + rnd(0.07, 0.11), vol: 0.18, f: 700, toF: 300, dur: 0.12 });
-    s.tone({ freq: 190, to: 85, dur: 0.12, vol: 0.22, delay });
+    if (s.sample('squish', { vol: 0.5, rate: rnd(0.85, 1.15), delay })) return;
+    wetSlap(s, { delay, vol: 0.3, f: 360, toF: 1100, dur: 0.17 });
+    s.tone({ freq: 190, to: 85, dur: 0.12, vol: 0.18, delay });
   },
   splatter: (s, { delay = 0 } = {}) => {
     // drops landing: a little noise and a rising "plip" each
@@ -831,13 +1028,14 @@ const SOUNDS = {
     }
   },
   bite: (s) => {
-    tick(s, { f: 1800, vol: 0.5, q: 3, dur: 0.05 });
-    s.tone({ freq: 150, to: 50, dur: 0.14, vol: 0.42, attack: 0.002 });
-    SOUNDS.squelch(s, { delay: 0.03 });
+    s.sample('punch', { vol: 0.5, rate: 1.2 });
+    if (!s.sample('crack_bone', { vol: 0.4, rate: 1.3, delay: 0.01 })) s.sample('chop', { vol: 0.45, rate: 1.1, delay: 0.01 });
+    s.tone({ freq: 140, to: 50, dur: 0.12, vol: 0.3, attack: 0.002 });
+    SOUNDS.squelch(s, { delay: 0.04 });
   },
   pop: (s) => {
-    s.tone({ freq: 240, to: 50, dur: 0.28, vol: 0.5, dist: 6 });
-    s.noise({ dur: 0.04, vol: 0.4, filter: 'highpass', freq: 1200, attack: 0.001 });
+    s.sample('punch_heavy', { vol: 0.7, rate: 0.8 });
+    s.tone({ freq: 220, to: 50, dur: 0.25, vol: 0.35 });
     SOUNDS.splatter(s);
     SOUNDS.squelch(s);
   },
@@ -861,6 +1059,7 @@ const SOUNDS = {
 
   // ------------------------------------------------ animal voices (Action)
   roar: (s, { pitch = 1 } = {}) => {
+    if (s.sample('roar_bigcat', { vol: 0.75, rate: Math.pow(pitch, 0.7) * rnd(0.96, 1.04), wet: 0.3 })) return;
     // a big cat: a rough, rising-then-falling "aaa-ohh" with a rattling throat and breath
     const p = pitch * rnd(0.95, 1.05);
     const curve = [
@@ -873,26 +1072,31 @@ const SOUNDS = {
     s.noise({ color: 'pink', dur: 1.15, vol: 0.28, filter: 'bandpass', freq: 750 * pitch, to: 300, q: 1.3, attack: 0.06, hold: 0.35, am: 31, amDepth: 0.3, wet: 0.3 });
   },
   growl: (s, { pitch = 1, dur = 0.9 } = {}) => {
+    if (s.sample('growl_bigcat', { vol: 0.65, rate: Math.pow(pitch, 0.6), dur, wet: 0.2 })) return;
     voice(s, { f: 72 * pitch, curve: [[0, 68 * pitch], [0.5, 82 * pitch], [1, 64 * pitch]], dur, vol: 0.3, vowel: 'o', vowelTo: 'u', attack: 0.12, hold: 0.5, am: 26, amDepth: 0.5, dist: 10, detune: 10, wet: 0.2 }); // prettier-ignore
     s.noise({ color: 'pink', dur, vol: 0.14, filter: 'bandpass', freq: 420 * pitch, q: 2, attack: 0.1, hold: 0.4, am: 26, amDepth: 0.4 });
   },
   screech: (s) => {
+    if (s.sample('screech_eagle', { vol: 0.55, wet: 0.35 })) return;
     // a raptor's scream: a harsh, wavering cry
     s.tone({ type: 'sawtooth', freq: 2200, curve: [[0, 2200], [0.15, 3000], [1, 1500]], dur: 0.75, vol: 0.11, attack: 0.02, hold: 0.3, vibrato: 120, vibRate: 30, lp: 5500, dist: 12, wet: 0.35 }); // prettier-ignore
     s.tone({ type: 'square', freq: 1500, curve: [[0, 1500], [0.15, 2000], [1, 1000]], dur: 0.7, vol: 0.04, attack: 0.02, vibrato: 90, vibRate: 30, lp: 4000 }); // prettier-ignore
     s.noise({ dur: 0.6, vol: 0.08, filter: 'bandpass', freq: 3500, q: 1, attack: 0.03 });
   },
   howl: (s) => {
+    if (s.sample('howl_wolf', { vol: 0.6, wet: 0.5 })) return;
     // a wolf: "ooo-OOOO-ooh", sliding up, holding, and falling away
     voice(s, { type: 'triangle', f: 360, curve: [[0, 360], [0.3, 720], [0.65, 700], [1, 420]], dur: 1.7, vol: 0.22, vowel: 'u', vowelTo: 'o', attack: 0.2, hold: 0.55, vibrato: 7, vibRate: 5.5, detune: 6, wet: 0.5 }); // prettier-ignore
     s.tone({ freq: 360, curve: [[0, 360], [0.3, 720], [0.65, 700], [1, 420]], dur: 1.7, vol: 0.12, attack: 0.25, hold: 0.5, vibrato: 7, vibRate: 5.5, wet: 0.5 }); // prettier-ignore
     s.noise({ color: 'pink', dur: 1.4, vol: 0.03, filter: 'bandpass', freq: 1200, q: 2, attack: 0.3, hold: 0.4 });
   },
   hiss: (s) => {
+    if (s.sample('hiss_snake', { vol: 0.5, wet: 0.2 })) return;
     s.noise({ dur: 0.75, vol: 0.28, filter: 'highpass', freq: 4500, q: 0.5, attack: 0.12, hold: 0.4, am: 9, amDepth: 0.15, wet: 0.2 });
     s.noise({ color: 'pink', dur: 0.7, vol: 0.08, filter: 'bandpass', freq: 2600, q: 1.5, attack: 0.15, hold: 0.4 });
   },
   snort: (s) => {
+    if (s.sample('snort_bull', { vol: 0.6, wet: 0.15 })) return;
     s.noise({ color: 'pink', dur: 0.3, vol: 0.24, freq: 700, to: 220, attack: 0.02, am: 34, amDepth: 0.4 });
     s.tone({ type: 'sawtooth', freq: 95, to: 70, dur: 0.22, vol: 0.06, lp: 500, am: 34 });
   },
@@ -900,40 +1104,92 @@ const SOUNDS = {
   // ------------------------------------------------ chains, cages, keys
   chain: (s, { dur = 1 } = {}) => {
     // links clinking as the chain is dragged, over a faint metal scrape
-    const n = Math.floor(dur * 14);
+    const n = Math.floor(dur * 12);
     for (let i = 0; i < n; i++) {
-      const at = i / 14 + Math.random() * 0.03;
-      metal(s, { f: rnd(1700, 3400), vol: rnd(0.035, 0.07), dur: rnd(0.07, 0.14), ratio: 2.41, index: 1.4, delay: at, pan: rnd(-0.35, 0.35), wet: 0.18 });
-      if (Math.random() < 0.15) metal(s, { f: rnd(500, 750), vol: 0.06, dur: 0.18, ratio: 1.41, index: 2, delay: at, wet: 0.2 });
+      const at = i / 12 + Math.random() * 0.04;
+      const pan = rnd(-0.35, 0.35);
+      if (!s.sample('metal_light', { vol: rnd(0.1, 0.2), rate: rnd(1.2, 2.1), delay: at, pan, wet: 0.15 })) {
+        metal(s, { f: rnd(1700, 3400), vol: rnd(0.035, 0.07), dur: rnd(0.07, 0.14), ratio: 2.41, index: 1.4, delay: at, pan, wet: 0.18 });
+      }
     }
-    s.noise({ dur, vol: 0.035, filter: 'bandpass', freq: 2400, q: 1.2, attack: 0.08, hold: 0.7, am: 13, amDepth: 0.45 });
+    s.noise({ dur, vol: 0.025, filter: 'bandpass', freq: 2400, q: 1.2, attack: 0.08, hold: 0.7, am: 13, amDepth: 0.45 });
   },
   clank: (s) => {
-    // a heavy iron bar or cage door slamming home
-    metal(s, { f: 230, vol: 0.2, dur: 0.75, ratio: 1.41, index: 4, wet: 0.35 });
-    metal(s, { f: 1230, vol: 0.09, dur: 0.45, ratio: 2.76, index: 2, wet: 0.35 });
-    s.noise({ dur: 0.04, vol: 0.3, filter: 'bandpass', freq: 3000, q: 2, attack: 0.001 });
-    s.tone({ freq: 110, to: 60, dur: 0.15, vol: 0.25, attack: 0.002 });
+    // the cage door slamming home
+    if (!s.sample('gate_slam', { vol: 0.55, rate: rnd(0.85, 0.95), wet: 0.3 })) metal(s, { f: 230, vol: 0.2, dur: 0.75, ratio: 1.41, index: 4, wet: 0.35 });
+    s.sample('metal_heavy', { vol: 0.55, rate: 0.8, wet: 0.3 });
+    s.tone({ freq: 100, to: 55, dur: 0.15, vol: 0.25, attack: 0.002 });
   },
   unlock: (s) => {
+    // the shackle springs open
     if (s.kids) {
-      tick(s, { f: 3400, vol: 0.14, dur: 0.02 });
-      tick(s, { f: 2600, vol: 0.14, dur: 0.02, delay: 0.08 });
-      [784, 1046.5, 1318.5, 1568].forEach((f, i) => bell(s, { f, vol: 0.06, delay: 0.16 + i * 0.05, dur: 0.6, wet: 0.25 }));
+      s.sample('latch', { vol: 0.3, rate: 1.6 });
+      SOUNDS.bubblePop?.(s, { delay: 0.03 });
       return;
     }
-    // the key turning: two latch clicks, the bolt sliding back, then a glint
-    metal(s, { f: 2900, vol: 0.08, dur: 0.05, ratio: 1.7, index: 1.5 });
-    metal(s, { f: 2300, vol: 0.08, dur: 0.05, ratio: 1.7, index: 1.5, delay: 0.09 });
-    metal(s, { f: 640, vol: 0.12, dur: 0.22, ratio: 1.41, index: 2.5, delay: 0.16, wet: 0.25 });
-    s.noise({ dur: 0.08, vol: 0.12, filter: 'bandpass', freq: 1800, q: 2, delay: 0.14 });
-    [880, 1318.5].forEach((f, i) => bell(s, { f, vol: 0.05, delay: 0.24 + i * 0.07, dur: 0.8, wet: 0.4 }));
+    s.sample('latch', { vol: 0.55, rate: 1.2 });
+    if (!s.sample('metal_heavy', { vol: 0.4, rate: 1.4, delay: 0.02, wet: 0.25 })) metal(s, { f: 640, vol: 0.12, dur: 0.22, ratio: 1.41, index: 2.5, wet: 0.25 });
+    bell(s, { f: 2637, vol: 0.025, delay: 0.03, dur: 0.5, wet: 0.3 });
   },
   creak: (s) => {
-    // a heavy hinge: stick-slip pulses through a resonant body
+    // a heavy hinge
+    if (s.sample('hinge_open', { vol: 0.4, rate: rnd(0.85, 1.05), wet: 0.3 })) return;
     s.tone({ type: 'sawtooth', freq: 34, curve: [[0, 34], [0.4, 60], [1, 45]], dur: 0.6, vol: 0.4, attack: 0.04, hold: 0.5, vibrato: 9, vibRate: 7, lp: 700, lpTo: 1100, lpQ: 7, ftype: 'bandpass', wet: 0.3 }); // prettier-ignore
   },
-
+  // ------------------------------------------------ getting out of the cage
+  // the golden key arrives
+  keyIn: (s) => {
+    if (s.kids) {
+      [1568, 2093, 2637].forEach((f, i) => bell(s, { f, vol: 0.045, delay: i * 0.06, dur: 0.6, wet: 0.3, pan: -0.3 + i * 0.3 }));
+      s.sample('metal_light', { vol: 0.1, rate: 2.4, delay: 0.05 });
+      return;
+    }
+    // a jangle of keys on a ring, swinging in
+    for (let i = 0; i < 3; i++) s.sample('metal_light', { vol: 0.2 - i * 0.04, rate: rnd(1.6, 2.2), delay: i * 0.075, pan: -0.25 + i * 0.25, wet: 0.2 });
+    s.noise({ color: 'pink', dur: 0.35, vol: 0.06, filter: 'bandpass', freq: 500, to: 1800, q: 1.2, attack: 0.25 });
+  },
+  // the key goes in and turns: a heavy latch and a click
+  keyTurn: (s) => {
+    if (s.kids) {
+      s.sample('click_metal', { vol: 0.35, rate: 1.5 });
+      mallet(s, { f: 1046.5, vol: 0.06, delay: 0.1, dur: 0.3 });
+      return;
+    }
+    s.sample('click_metal', { vol: 0.35, rate: 1.1 });
+    if (!s.sample('latch', { vol: 0.7, rate: 0.85, delay: 0.1, wet: 0.2 })) metal(s, { f: 2300, vol: 0.08, dur: 0.05, ratio: 1.7, index: 1.5, delay: 0.1 });
+    s.tone({ freq: 160, to: 90, dur: 0.1, vol: 0.18, delay: 0.1, attack: 0.002 });
+  },
+  // the cage swings up and away
+  cageLift: (s) => {
+    if (s.kids) {
+      SOUNDS.harp?.(s);
+      s.noise({ color: 'pink', dur: 0.6, vol: 0.06, filter: 'bandpass', freq: 600, to: 2400, q: 1, attack: 0.3 });
+      return;
+    }
+    if (!s.sample('hinge_open', { vol: 0.42, rate: 0.75, wet: 0.35 })) SOUNDS.creak(s);
+    for (let i = 0; i < 4; i++) s.sample('metal_light', { vol: 0.09, rate: rnd(1.3, 1.9), delay: 0.12 + i * 0.11, pan: rnd(-0.3, 0.3), wet: 0.2 });
+    s.noise({ color: 'pink', dur: 0.7, vol: 0.12, filter: 'bandpass', freq: 300, to: 1600, q: 1.1, attack: 0.45, delay: 0.1 });
+  },
+  // the freed animal leaps out with its own call
+  release: (s, { animal = 'tiger' } = {}) => {
+    if (s.kids) {
+      SOUNDS.whee?.(s, { pitch: 1.1 });
+      SOUNDS.sparkle(s, { delay: 0.15 });
+      return;
+    }
+    animalCall(s, animal, 0.6);
+    SOUNDS.whoosh(s, { dur: 0.45, delay: 0.05 });
+    SOUNDS.drum(s, { power: 0.6, delay: 0.02 });
+  },
+  // a padlock snapping shut
+  lockSnap: (s) => {
+    if (s.kids) {
+      s.sample('click_metal', { vol: 0.35, rate: 1.6 });
+      return;
+    }
+    s.sample('latch', { vol: 0.6, rate: 1 });
+    s.sample('click_metal', { vol: 0.3, rate: 1.2, delay: 0.05 });
+  },
   // ------------------------------------------------ music and feedback
   sparkle: (s, { delay = 0 } = {}) => {
     [1568, 1975.5, 2349.3, 3136].forEach((f, i) => bell(s, { f, vol: 0.05, delay: delay + i * 0.06, dur: 0.6, wet: 0.4, pan: rnd(-0.5, 0.5) }));

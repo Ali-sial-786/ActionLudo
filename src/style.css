@@ -2399,3 +2399,71 @@ body.kids .rule-seg {
     flex-wrap: wrap;
   }
 }
+
+/* ---------------------------------------------------------------- sound settings */
+.sound-settings .vol-list {
+  max-width: 560px;
+  margin: 10px auto 0;
+}
+
+.vol-list {
+  display: grid;
+}
+
+.vol-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(110px, 46%) 3.2em;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+
+.vol-row.master label {
+  font-weight: 900;
+}
+
+.vol-row label {
+  color: var(--text);
+  font-weight: 700;
+  font-size: 14px;
+  min-width: 0;
+}
+
+.vol-row input[type='range'] {
+  width: 100%;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.vol-row output {
+  text-align: right;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+/* inside the in-game menu sheet */
+.sound-ingame summary {
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.sound-ingame .vol-row {
+  grid-template-columns: minmax(0, 1fr) 96px 3em;
+  gap: 8px;
+}
+
+.sound-ingame .vol-row label {
+  font-size: 13px;
+}
+
+.quit-confirm {
+  max-height: calc(100% - 140px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  overflow-y: auto;
+}
+
+body.kids .vol-row input[type='range'] {
+  accent-color: var(--k-pink);
+}

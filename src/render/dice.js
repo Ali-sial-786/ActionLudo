@@ -180,7 +180,7 @@ export class Dice {
     this.glow.position.copy(to).setY(TRAY.floor + 0.01);
     const dist = from.distanceTo(to);
     if (dist > 0.05) {
-      this.sfx?.play('whoosh', { dur: 0.3 });
+      this.sfx?.play('whoosh', { dur: 0.3, group: 'dice' });
       await this.anim.tween(Math.min(0.75, 0.3 + dist * 0.025), (k) => {
         this.mesh.position.lerpVectors(from, to, k);
         this.mesh.position.y += arc(k, Math.min(3, dist * 0.2));
@@ -283,7 +283,7 @@ export class Dice {
       bounds: trayBounds(this.seat),
     });
 
-    this.sfx?.play('whoosh', { dur: 0.25 });
+    this.sfx?.play('whoosh', { dur: 0.25, group: 'dice' });
     const p = new THREE.Vector3();
     const q = new THREE.Quaternion();
     let next = 0;
