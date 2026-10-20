@@ -987,64 +987,103 @@ async function rhino(ctx) {
 async function scorpion(ctx) {
   const { anim, atk, vic, sfx, dist, D } = ctx;
   const p = atk.parts;
-  const stop = D.track({ at: () => wpos(atk.model), yaw: 48, pitch: 6, dist: 0.95, lift: 0.18 }, 7);
-  ctx.world.setFov(30);
+  const shot = (spec, to) => heavyShot(ctx, spec, to);
+  // tail pose: the base segment swings the whole tail, the rest open or close its curl
+  const tail0 = p.tail.map((s) => s.rotation.x);
+  let tailNow = [0, 0];
+  const curl = (base, rest) => {
+    tailNow = [base, rest];
+    p.tail.forEach((seg, j) => (seg.rotation.x = tail0[j] + (j === 0 ? base : rest)));
+  };
+  const curlTo = (base, rest, dur, ease) => {
+    const [b0, r0] = tailNow;
+    return anim.tween(dur, (k) => curl(lerp(b0, base, k), lerp(r0, rest, k)), ease);
+  };
+  // close enough for the pincers to take the forelegs and the stinger to reach the face
+  const near = dist - 0.6;
+  const close = ctx.A.clone().lerp(ctx.V, 0.6);
+  // skitters in, pincers raised, tail cocked
+  D.cut(shot({ at: ctx.A.clone().lerp(ctx.V, 0.5), yaw: 24, pitch: 14, dist: 1.5, lift: 0.32, fov: 34 }));
+  D.move(shot({ at: close, yaw: 28, pitch: 14, dist: 1.4, lift: 0.33 }), 0.8, Ease.inOutSine);
   sfx.play('hiss');
-  await anim.tween(0.8, (k, raw) => {
-    setZ(atk, lerp(0, dist - 0.62, k), 0);
-    p.legs.forEach((leg, i) => (leg.rotation.x = Math.sin(raw * 40 + i * 1.3) * 0.32));
+  await anim.tween(0.75, (k) => {
+    setZ(atk, lerp(0, near, Ease.inOutQuad(k)), 0);
+    const step = Math.sin(k * Math.PI);
+    p.legs.forEach((leg, i) => (leg.rotation.x = Math.sin(k * 40 + i * 1.3) * 0.32 * step));
     p.clawL.rotation.x = p.clawR.rotation.x = -0.5 * k;
-    p.fingerL.rotation.y = 0.15 + Math.abs(Math.sin(raw * 16)) * 0.6;
-    p.fingerR.rotation.y = -0.15 - Math.abs(Math.sin(raw * 16)) * 0.6;
+    p.fingerL.rotation.y = 0.15 + Math.abs(Math.sin(k * 16)) * 0.6;
+    p.fingerR.rotation.y = -0.15 - Math.abs(Math.sin(k * 16)) * 0.6;
+    curl(-0.1 * k, 0);
   });
-  stop();
-  for (let i = 0; i < 3; i++) sfx.play('pinch', { delay: i * 0.1 });
-  // pincers clamp: one at the throat, one at the body
-  D.cut({ at: ctx.V, yaw: 50, pitch: 12, dist: 1.1, lift: 0.3, fov: 30 });
-  await anim.tween(0.2, (k) => {
-    p.fingerL.rotation.y = 0.75 * k;
-    p.fingerR.rotation.y = -0.75 * k;
+  p.legs.forEach((leg) => (leg.rotation.x = 0));
+  // pincers snap shut on the forelegs; the prey snaps down at its attacker
+  for (let i = 0; i < 3; i++) sfx.play('pinch', { delay: i * 0.08 });
+  await anim.tween(0.18, (k) => {
+    p.fingerL.rotation.y = lerp(0.15, 0.75, k);
+    p.fingerR.rotation.y = lerp(-0.15, -0.75, k);
   });
-  await anim.tween(0.12, (k) => {
-    p.clawL.rotation.x = p.clawR.rotation.x = lerp(-0.5, 0.15, k);
+  await anim.tween(0.08, (k) => {
+    p.clawL.rotation.x = p.clawR.rotation.x = lerp(-0.5, 0.1, k);
     p.clawL.rotation.y = -0.25 * k;
     p.clawR.rotation.y = 0.25 * k;
     p.fingerL.rotation.y = lerp(0.75, -0.05, k);
     p.fingerR.rotation.y = lerp(-0.75, 0.05, k);
-  });
-  hit(ctx, headPoint(vic), { count: 40, wound: 0.045, sound: 'crunch', impact: 0.8 });
-  hit(ctx, bodyPoint(vic, 0.2), { count: 30, wound: 0.045, sound: 'squelch', impact: 0.4 });
-  await anim.tween(0.2, (k) => (vic.model.position.y = 0.07 + 0.1 * k));
-  // the stinger hammers in, again and again
-  for (let i = 0; i < 4; i++) {
-    if (i === 0) killcam(ctx, { at: ctx.V, yaw: 20, pitch: 30, dist: 1.0, lift: 0.4, fov: 30 }, 0.25, 0.5);
-    await anim.tween(0.13, (k) => p.tail.forEach((seg, j) => (seg.rotation.x = (j === 0 ? 1.4 : 0.5) + 0.28 * k)), Ease.inQuad);
+  }, Ease.inQuad);
+  hit(ctx, wpos(p.fingerL), { count: 22, wound: 0.04, sound: 'crunch', impact: 0.7, mist: 0.3 });
+  hit(ctx, wpos(p.fingerR), { count: 12, wound: 0.035, sound: null, impact: 0.3, mist: 0 });
+  const vicHead = vic.parts.head;
+  const vh0 = vicHead?.rotation.x ?? 0;
+  await anim.tween(0.2, (k) => {
+    if (vicHead) vicHead.rotation.x = vh0 + 0.3 * k;
+    if (vic.parts.jaw) vic.parts.jaw.rotation.x = 0.5 * Math.sin(k * Math.PI * 0.5);
+  }, Ease.outQuad);
+  // the stinger: drawn back, then driven into its face; twice
+  const face = () => wpos(p.stinger);
+  const faceAt = vic.parts.head ? wpos(vic.parts.head).setY(BOARD_Y) : ctx.V.clone();
+  for (let i = 0; i < 2; i++) {
+    // first from over the tail as it arcs in, then back on the pair
+    if (i === 0) killcam(ctx, shot({ at: faceAt, yaw: -40, pitch: 16, dist: 1.1, lift: 0.36, fov: 34 }), 0.25, 0.6);
+    else D.cut(shot({ at: close, yaw: 30, pitch: 14, dist: 1.4, lift: 0.33, fov: 34 }));
+    await curlTo(-0.3, 0.05, 0.22, Ease.outQuad);
+    await curlTo(0.8, -0.25, 0.07, Ease.inQuad);
     sfx.play('sting');
-    hit(ctx, bodyPoint(vic, 0.35), { count: 35, wound: 0.03, sound: 'squelch', impact: 0.7, mist: 0.4 });
-    vic.tint(0x1a0a20, 0.18 * (i + 1), 0);
-    await Promise.all([anim.tween(0.18, (k) => p.tail.forEach((seg, j) => (seg.rotation.x = (j === 0 ? 1.4 : 0.5) + 0.28 * (1 - k)))), struggle(ctx, vic, 0.18, 1.2)]);
+    hit(ctx, face(), { count: 26, wound: 0.035, sound: 'squelch', impact: 0.8, mist: 0.35 });
+    vic.tint(0x1a0a20, 0.25 * (i + 1), 0);
+    await Promise.all([struggle(ctx, vic, 0.22, 1.1), anim.wait(0.22)]);
+    await curlTo(-0.1, 0, 0.16, Ease.inOutQuad);
   }
   // convulsions as the venom takes hold, foaming at the mouth
   await Promise.all([
-    struggle(ctx, vic, 0.9, 1.4, true),
-    anim.tween(0.9, () => {
+    struggle(ctx, vic, 0.7, 1.2, true),
+    anim.tween(0.7, () => {
       if (Math.random() < 0.3) ctx.fx.burst(headPoint(vic), { count: 2, colors: [0xe8f0d0, 0xc8d8a0], shape: 'sphere', speed: 0.3, up: 0.2, gravity: 1, size: [0.01, 0.02], life: [0.4, 0.8] });
     }),
   ]);
   // ripped apart in the pincers
-  killcam(ctx, { at: ctx.V, yaw: 42, pitch: 12, dist: 1.2, lift: 0.3, fov: 30 }, 0.15, 1.3);
+  const kill = ctx.V.clone().addScaledVector(ctx.dir, -0.25);
+  // high over the scorpion's shoulder, the pincers in front
+  killcam(ctx, shot({ at: kill, yaw: -24, pitch: 30, dist: 1.4, lift: 0.25, fov: 34 }), 0.15, 1.0);
   await anim.tween(0.2, (k) => {
     p.clawL.rotation.y = lerp(-0.25, 0.5, k);
     p.clawR.rotation.y = lerp(0.25, -0.5, k);
-  });
-  finish(ctx, { mode: 'halves', axis: 'x', power: 2.2, up: 1.3 });
-  await D.orbit({ at: ctx.V, yaw: 42, pitch: 12, dist: 1.3, lift: 0.3 }, 160, 1.6);
-  await anim.tween(0.45, (k) => {
-    p.clawL.rotation.set(lerp(0.15, 0, k), lerp(0.5, 0, k), 0);
-    p.clawR.rotation.set(lerp(0.15, 0, k), lerp(-0.5, 0, k), 0);
-    p.tail[0].rotation.x = 1.1;
-    setZ(atk, lerp(dist - 0.62, dist, k), 0);
-  });
+  }, Ease.inQuad);
+  finish(ctx, { mode: 'halves', axis: 'x', power: 1.3, up: 0.8 });
+  // scuttles onto the square as the camera swings round
+  const orbit = shot({ at: kill, yaw: -24, pitch: 24, dist: 1.55, lift: 0.25 }, 18);
+  await Promise.all([
+    D.orbit(orbit, orbit.to, 1.5),
+    anim.wait(0.6).then(() =>
+      anim.tween(0.55, (k) => {
+        p.clawL.rotation.set(lerp(0.1, 0, k), lerp(0.5, 0, k), 0);
+        p.clawR.rotation.set(lerp(0.1, 0, k), lerp(-0.5, 0, k), 0);
+        p.fingerL.rotation.y = lerp(-0.05, 0.15, k);
+        p.fingerR.rotation.y = lerp(0.05, -0.15, k);
+        p.legs.forEach((leg, i) => (leg.rotation.x = Math.sin(k * 30 + i * 1.3) * 0.25 * Math.sin(k * Math.PI)));
+        curl(-0.1 * (1 - k), 0);
+        setZ(atk, lerp(near, dist, Ease.inOutQuad(k)), 0);
+      }),
+    ),
+  ]);
 }
 
 // ------------------------------------------------------------------ CROCODILE: Death Roll
