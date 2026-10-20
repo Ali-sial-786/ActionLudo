@@ -88,7 +88,7 @@ The throw is for fun only: the number is drawn fairly the moment the die leaves 
 - **Move:** click a glowing animal (hover shows where it will land).
 - **Clash:** mash any key or tap anywhere. Two players on one device: the attacker mashes A S D F (or taps the left half of the screen) and the defender mashes J K L (or the right half).
 - **Camera:** drag to orbit, scroll or pinch to zoom, 🎥 resets the view.
-- **1× / 2× / 3×** changes animation speed; during a kill, **⏩ Fast-forward** (or <kbd>Space</kbd>) speeds through it and skips the slow motion. 🔊 toggles sound; **Background sounds** on the main menu turns the ambience on or off.
+- **1× / 2× / 3×** changes animation speed; during a kill, **⏩ Fast-forward** (or <kbd>Space</kbd>) speeds through it and skips the slow motion. 🔊 toggles sound. **🔊 Sound** on the main menu (and in the in-game ☰ menu) has a volume slider for each kind of sound: fights and animals, cages and chains, dice, footsteps, cheers and menus, and the background.
 
 Any seat can be **Human**, **CPU** or **Off** (2–4 players). Several humans can share one device and take turns.
 
@@ -126,7 +126,7 @@ Hosting serves the hashed `assets/` with a one-year immutable cache, while `inde
 - **Three.js** for rendering. Everything is procedural: the board, cages, key, chains, dice and all ten animals are built in code, with fur, stripes, scales and hide painted onto canvas textures at startup. There are no model or image assets.
 - Kill-cam post-processing: depth of field, a desaturated colour grade with vignette, film grain and a red impact flash, plus dramatic spot/red rim lighting during fights.
 - Gore: instanced blood droplets that splat into stains, spreading pools and drag smears, wounds stuck to the body, and dismemberment where torsos are split with clipping planes to show the flesh inside.
-- **WebAudio** synthesises every sound effect at runtime (roars, bone crunches, tearing flesh, chain rattles, dice clatter…) from layered oscillators, FM (bells, metal), vowel formants (roars, howls, cheering kids) and filtered noise, through a generated reverb, stereo panning that follows the action on screen, and a compressor. The ambience loops are synthesised too.
+- **WebAudio** plays the sound effects: short public-domain recordings (blows, metal, latches, swipes; see `src/sounds/CREDITS.md`) layered with synthesis (layered oscillators, FM for bells and metal, vowel formants for voices, filtered noise), through a generated reverb, stereo panning that follows the action on screen, a volume per group of sounds, and a compressor. The ambience loops are synthesised.
 - **Vite** for dev server and bundling.
 
 ```
@@ -156,7 +156,9 @@ src/
   render/animalsKid.js  cute Kids-mode animals
   render/battlesKid.js  playful Kids-mode capture choreography and float home
   render/kidEffects.js  Kids-mode particle effects
-  engine/audio.js       sound engine (reverb, panning, formants, FM, ambience) and the Action sounds
+  engine/audio.js       sound engine (samples, groups, reverb, panning, formants, FM, ambience) and the Action sounds
+  sounds/               recorded sound samples (CC0) and their credits
+  ui/soundPanel.js      the Sound settings: a volume slider per group of sounds
   engine/kidSounds.js   Kids-mode sound effects (yay, tada, boing, bubble, squeak, giggle, poof)
   ui/hud.js           setup screen, mode switch, arena, HUD, banners
   ui/duelUI.js        the clash overlay: bar, mash pads, countdown, timer, result
