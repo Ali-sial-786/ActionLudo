@@ -748,93 +748,124 @@ async function shark(ctx) {
 async function gorilla(ctx) {
   const { anim, atk, vic, sfx, dist, D } = ctx;
   const p = atk.parts;
-  D.cut({ at: ctx.A, yaw: 45, pitch: 2, dist: 1.25, lift: 0.5, fov: 34 });
+  const shot = (spec, to) => heavyShot(ctx, spec, to);
+  const vb = heavyBounds(vic);
+  const vc = vb.getCenter(new THREE.Vector3());
+  const vh = vb.max.y - vb.min.y;
+  const rest = vc.clone().add(vic.model.position);
+  atk.root.updateMatrixWorld(true);
+  vic.root.updateMatrixWorld(true);
+  // a point given in the gorilla's frame, expressed in the prey's
+  const inVic = (x, y, z) => vic.root.worldToLocal(atk.root.localToWorld(new THREE.Vector3(x, y, z)));
+  const vicHead = vic.parts.head;
+  const vh0 = vicHead?.rotation.x ?? 0;
+  // chest-beating two-shot: the challenger on the left, the prey cowering on the right
+  D.cut(shot({ at: ctx.A.clone().lerp(ctx.V, 0.42), yaw: 14, pitch: 7, dist: 1.6, lift: 0.36, fov: 34 }));
   for (let i = 0; i < 4; i++) {
     const arm = i % 2 ? p.armR : p.armL;
     sfx.play('drum');
     sfx.play('drum', { delay: 0.04 });
-    await anim.tween(0.24, (k) => {
+    await anim.tween(0.22, (k) => {
       const s = Math.sin(k * Math.PI);
       arm.rotation.x = -1.4 * s;
       arm.rotation.z = (i % 2 ? 1 : -1) * 0.95 * s;
       p.head.rotation.x = -0.25 * s;
       p.jaw.rotation.x = 0.4 * s;
+      if (vicHead) vicHead.rotation.x = vh0 + 0.25 * Math.min(1, (i + k) / 2);
     });
   }
   sfx.play('roar', { pitch: 0.7 });
-  await anim.tween(0.5, (k) => (p.jaw.rotation.x = 0.7 * Math.sin(k * Math.PI)));
-  // charge and seize
-  D.cut({ at: ctx.V, yaw: 15, pitch: 12, dist: 2.0, lift: 0.4, fov: 34 });
-  await anim.tween(0.35, (k) => {
-    setZ(atk, lerp(0, dist - 0.45, k), arc(k, 0.2));
-    p.armL.rotation.x = p.armR.rotation.x = -1.5 * k;
+  await anim.tween(0.45, (k) => {
+    const s = Math.sin(k * Math.PI);
+    p.jaw.rotation.x = 0.75 * s;
+    p.head.rotation.x = -0.35 * s;
+    atk.model.rotation.x = -0.12 * s;
   });
-  hit(ctx, bodyPoint(vic, 0.2), { count: 15, wound: 0, sound: 'crunch', impact: 0.4 });
-  const vicStart = vic.root.position.clone();
-  const overhead = atk.model.localToWorld(new THREE.Vector3(0, 1.05, 0.05));
-  await Promise.all([
-    anim.tween(0.4, (k) => {
-      vic.root.position.lerpVectors(vicStart, overhead, Ease.outQuad(k));
-      p.armL.rotation.x = p.armR.rotation.x = lerp(-1.5, -3.0, k);
-      vic.model.rotation.z = k * Math.PI * 0.9;
-    }),
-    struggle(ctx, vic, 0.4, 1),
-  ]);
-  // pile-driven into the board, twice
-  const front = ctx.V.clone().addScaledVector(ctx.dir, 0.12).setY(BOARD_Y);
-  for (let i = 0; i < 2; i++) {
-    if (i === 1) killcam(ctx, { at: front, yaw: 60, pitch: 10, dist: 1.2, lift: 0.2, fov: 30 }, 0.3, 0.4);
-    else D.cut({ at: front, yaw: 40, pitch: 16, dist: 1.6, lift: 0.3, fov: 32 });
-    await anim.tween(0.17, (k) => {
-      vic.root.position.lerpVectors(overhead, front, Ease.inQuad(k));
-      p.armL.rotation.x = p.armR.rotation.x = lerp(-3.0, -1.2, k);
-      atk.model.rotation.x = 0.35 * k;
-    });
-    sfx.play('thud', { power: 1 });
-    sfx.play('crunch');
-    hit(ctx, front.clone().setY(BOARD_Y + 0.15), { count: 60, wound: 0.06, sound: 'squelch', impact: 1.1, mist: 0.8 });
-    ctx.gore.decal(front, 0.6, 'splat');
-    ctx.world.shake(0.3);
-    vic.model.scale.set(1 + 0.12 * (i + 1), 1 - 0.15 * (i + 1), 1 + 0.12 * (i + 1));
-    await anim.tween(0.27, (k) => {
-      vic.root.position.lerpVectors(front, overhead, Ease.outQuad(k));
-      p.armL.rotation.x = p.armR.rotation.x = lerp(-1.2, -3.0, k);
-      atk.model.rotation.x = 0.35 * (1 - k);
-    });
-  }
-  // slammed down, then pounded with both fists
-  await anim.tween(0.17, (k) => {
-    vic.root.position.lerpVectors(overhead, front, Ease.inQuad(k));
-    p.armL.rotation.x = p.armR.rotation.x = lerp(-3.0, -1.2, k);
+  // charges in, and the prey is hoisted overhead, belly up
+  const reach = dist - 0.72;
+  D.move(shot({ at: ctx.A.clone().lerp(ctx.V, 0.66), yaw: 12, pitch: 6, dist: 1.9, lift: 0.7 }), 0.6);
+  await anim.tween(0.3, (k) => {
+    setZ(atk, lerp(0, reach, Ease.inQuad(k)), arc(k, 0.1));
+    p.armL.rotation.x = p.armR.rotation.x = -1.3 * k;
+    atk.model.rotation.x = 0.15 * k;
   });
   sfx.play('thud');
-  D.cut({ at: front, yaw: 30, pitch: 34, dist: 1.4, lift: 0.1, fov: 32 });
-  for (let i = 0; i < 3; i++) {
-    await anim.tween(0.16, (k) => (p.armL.rotation.x = p.armR.rotation.x = lerp(-1.2, -2.8, Ease.outQuad(k))));
-    await anim.tween(0.1, (k) => (p.armL.rotation.x = p.armR.rotation.x = lerp(-2.8, -1.0, k)), Ease.inQuad);
+  D.impact(0.4);
+  const overhead = inVic(0, 0.8 + vh * 0.33, reach + 0.3);
+  await Promise.all([
+    struggle(ctx, vic, 0.42, 1),
+    anim.tween(0.42, (k) => {
+      const to = new THREE.Vector3(lerp(rest.x, overhead.x, k), lerp(rest.y, overhead.y, Ease.outQuad(k)), lerp(rest.z, overhead.z, Ease.inQuad(k)));
+      heavyHold(vic, vc, to, 0, 0, Math.PI * Ease.inOutQuad(k));
+      p.armL.rotation.x = p.armR.rotation.x = lerp(-1.3, -2.9, k);
+      atk.model.rotation.x = lerp(0.15, -0.1, k);
+    }),
+  ]);
+  // SLAM: driven down onto its back in front of the gorilla
+  const ground = inVic(0, vh * 0.44, dist - 0.05);
+  const groundW = vic.root.localToWorld(ground.clone()).setY(BOARD_Y);
+  D.cut(shot({ at: ctx.A.clone().lerp(ctx.V, 0.66), yaw: 30, pitch: 12, dist: 1.55, lift: 0.4, fov: 34 }));
+  await anim.tween(0.16, (k) => {
+    heavyHold(vic, vc, overhead.clone().lerp(ground, k), 0, 0, Math.PI);
+    p.armL.rotation.x = p.armR.rotation.x = lerp(-2.9, -1.0, k);
+    atk.model.rotation.x = lerp(-0.1, 0.3, k);
+  }, Ease.inQuad);
+  D.slowmo(0.3, 0.35);
+  sfx.play('thud', { power: 1 });
+  sfx.play('crunch');
+  hit(ctx, groundW.clone().setY(BOARD_Y + 0.15), { count: 45, wound: 0.06, sound: 'squelch', impact: 1.1, mist: 0.6 });
+  ctx.gore.decal(groundW, 0.5, 'splat');
+  ctx.world.shake(0.3);
+  await anim.tween(0.22, (k) => {
+    const s = 1 - 0.18 * Math.sin(Math.min(1, k * 2) * Math.PI * 0.5) + 0.08 * Math.max(0, k * 2 - 1);
+    vic.model.scale.set(1 + (1 - s) * 0.6, s, 1 + (1 - s) * 0.6);
+    heavyHold(vic, vc, ground, 0, 0, Math.PI);
+  });
+  // two hammer blows with both fists
+  D.cut(shot({ at: groundW.clone().lerp(ctx.A, 0.25), yaw: 42, pitch: 14, dist: 1.65, lift: 0.44, fov: 34 }));
+  for (let i = 0; i < 2; i++) {
+    await anim.tween(0.17, (k) => {
+      p.armL.rotation.x = p.armR.rotation.x = lerp(-1.0, -2.7, k);
+      atk.model.rotation.x = lerp(0.3, -0.05, k);
+    }, Ease.outQuad);
+    await anim.tween(0.08, (k) => {
+      p.armL.rotation.x = p.armR.rotation.x = lerp(-2.7, -0.95, k);
+      atk.model.rotation.x = lerp(-0.05, 0.3, k);
+    }, Ease.inQuad);
     sfx.play('thud', { power: 0.9 });
     sfx.play('crunch');
-    hit(ctx, bodyPoint(vic, 0.15), { count: 45, wound: 0.05, sound: null, impact: 0.9 });
+    hit(ctx, groundW.clone().setY(BOARD_Y + 0.2), { count: 30, wound: 0.05, sound: null, impact: 0.9, mist: 0.4 });
     ctx.world.shake(0.25);
+    const s = 0.86 - 0.05 * i;
+    vic.model.scale.set(1 + (1 - s) * 0.6, s, 1 + (1 - s) * 0.6);
+    heavyHold(vic, vc, ground, 0, 0, Math.PI);
+    await anim.wait(0.06);
   }
-  // tears it apart with both hands
-  killcam(ctx, { at: front, yaw: 42, pitch: 14, dist: 1.25, lift: 0.3, fov: 30 }, 0.15, 1.3);
+  // tears it in two with both hands
+  // seen from high on the side, so neither body hides the other
+  killcam(ctx, shot({ at: groundW.clone().lerp(ctx.A, 0.2), yaw: 8, pitch: 30, dist: 1.5, lift: 0.3, fov: 34 }), 0.15, 1.0);
   await anim.tween(0.25, (k) => {
-    p.armL.rotation.z = -1.0 * k;
-    p.armR.rotation.z = 1.0 * k;
-    p.armL.rotation.x = p.armR.rotation.x = lerp(-1.0, -1.6, k);
-    vic.root.position.y = BOARD_Y + 0.3 * k;
-  });
-  finish(ctx, { mode: 'halves', axis: 'x', power: 2.4, up: 1.4 });
+    p.armL.rotation.z = -0.9 * k;
+    p.armR.rotation.z = 0.9 * k;
+    p.armL.rotation.x = p.armR.rotation.x = lerp(-0.95, -1.5, k);
+    atk.model.rotation.x = lerp(0.3, 0.1, k);
+    heavyHold(vic, vc, ground.clone().add(new THREE.Vector3(0, 0.18 * k, 0)), 0, 0, Math.PI);
+  }, Ease.outQuad);
+  finish(ctx, { mode: 'halves', axis: 'x', power: 1.1, up: 0.8 });
   sfx.play('roar', { pitch: 0.65 });
-  await D.orbit({ at: front, yaw: 42, pitch: 14, dist: 1.4, lift: 0.3 }, 170, 1.6);
-  vic.root.position.copy(vicStart);
-  await anim.tween(0.5, (k) => {
-    atk.model.rotation.x = 0;
-    p.armL.rotation.set(lerp(-1.6, 0, k), 0, lerp(-1.0, 0, k));
-    p.armR.rotation.set(lerp(-1.6, 0, k), 0, lerp(1.0, 0, k));
-    setZ(atk, lerp(dist - 0.45, dist, k), 0);
-  });
+  // holds the pose a beat, then straightens up and steps onto the square as the camera swings round
+  const orbit = shot({ at: groundW, yaw: 8, pitch: 24, dist: 1.6, lift: 0.3 }, 52);
+  await Promise.all([
+    D.orbit(orbit, orbit.to, 1.5),
+    anim.wait(0.7).then(() =>
+      anim.tween(0.6, (k) => {
+        atk.model.rotation.x = lerp(0.1, 0, k);
+        p.armL.rotation.set(lerp(-1.5, 0, k), 0, lerp(-0.9, 0, k));
+        p.armR.rotation.set(lerp(-1.5, 0, k), 0, lerp(0.9, 0, k));
+        setZ(atk, lerp(reach, dist, k), arc(k, 0.05));
+      }, Ease.inOutQuad),
+    ),
+  ]);
 }
 
 // ------------------------------------------------------------------ RHINO: Gore & Trample
