@@ -767,9 +767,11 @@ export class GameController {
       A,
       V,
       director: D,
+      // the title card comes up just after the kill, so it doesn't hide the moment itself
       onKill: () => {
         titled = true;
-        this.hud.killTitle(atkPlayer, vicPlayer);
+        const session = this.session;
+        this.anim.wait(0.9).then(() => this.alive(session) && this.hud.killTitle(atkPlayer, vicPlayer));
       },
     });
     // team bases tuck away for the fight; the attacker's reappears under it on the victim's square

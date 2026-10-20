@@ -742,9 +742,10 @@ body.kids .quit-confirm {
   animation: zoomIn 0.5s 0.2s cubic-bezier(0.2, 1, 0.3, 1) both;
 }
 
+/* the kill title sits in the bottom letterbox bar, clear of the action */
 .banner.kill {
   top: auto;
-  bottom: calc(12vh + 18px);
+  bottom: calc(1.2vh + env(safe-area-inset-bottom));
 }
 
 .kill-card {
@@ -754,7 +755,7 @@ body.kids .quit-confirm {
 
 .kill-move {
   font-family: var(--comic);
-  font-size: clamp(40px, 8vw, 84px);
+  font-size: clamp(22px, 4.2vw, 46px);
   letter-spacing: 6px;
   line-height: 1;
   color: #e9e2d8;
@@ -762,11 +763,11 @@ body.kids .quit-confirm {
 }
 
 .kill-line {
-  margin-top: 6px;
+  margin-top: 4px;
   display: inline-block;
   font-family: var(--condensed);
   font-weight: 700;
-  font-size: clamp(16px, 2.6vw, 22px);
+  font-size: clamp(12px, 1.8vw, 16px);
   letter-spacing: 3px;
   text-transform: uppercase;
   color: #fff;
