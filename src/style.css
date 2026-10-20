@@ -13,6 +13,7 @@
   --font: 'Barlow', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --condensed: 'Barlow Condensed', 'Arial Narrow', sans-serif;
   --comic: 'Anton', 'Impact', 'Arial Black', sans-serif;
+  color-scheme: dark;
 }
 
 * {
@@ -576,6 +577,46 @@ body:not(.kids) .only-kids {
   background: rgba(40, 48, 90, 0.9);
 }
 
+.quit-confirm {
+  position: absolute;
+  top: calc(62px + env(safe-area-inset-top));
+  right: 12px;
+  width: min(300px, calc(100% - 24px));
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  pointer-events: auto;
+  z-index: 5;
+}
+
+.quit-confirm[hidden] {
+  display: none;
+}
+
+.quit-confirm p {
+  margin: 0;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.quit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+body.kids .quit-confirm {
+  border: 3px solid #fff;
+  border-radius: 22px;
+  box-shadow: 0 6px 0 var(--k-shadow), 0 14px 30px var(--k-shadow);
+}
+
 .hud-bottom {
   position: absolute;
   left: 50%;
@@ -987,6 +1028,7 @@ body.letterbox .hud-bottom {
 /* ================================================================ KIDS THEME
    body.kids: bright pastels, a rounded bubbly font, cheerful candy buttons. */
 body.kids {
+  color-scheme: light;
   --bg: #bfe6ff;
   --panel: rgba(255, 255, 255, 0.93);
   --border: #ebe4ff;

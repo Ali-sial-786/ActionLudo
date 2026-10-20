@@ -179,7 +179,14 @@ hud.showSetup();
 // Handy for debugging from the console.
 window.actionLudo = { world, controller, hud, sfx, settings, setMode, rules };
 
-// Installable web app: the service worker caches the game so it also runs offline.
-if (import.meta.env.PROD && 'serviceWorker' in navigator) {
-  window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
+// Installable web app: the service worker caches the game so it also runs offline. (The build
+// published as a claude.ai Artifact skips it: Artifact pages can't run service workers.)
+if (import.meta.env.PROD && !import.meta.env.VITE_ARTIFACT && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    try {
+      navigator.serviceWorker.register('./sw.js').catch(() => {});
+    } catch {
+      /* not allowed here */
+    }
+  });
 }

@@ -169,6 +169,7 @@ export class Hud {
   }
 
   showSetup() {
+    $('quit-confirm').hidden = true;
     $('setup').classList.remove('hidden');
     $('hud').classList.add('hidden');
     $('arena').classList.add('hidden');
@@ -254,6 +255,7 @@ export class Hud {
 
   // ---------------------------------------------------------------- in-game HUD
   showGame(game) {
+    $('quit-confirm').hidden = true;
     $('setup').classList.add('hidden');
     $('arena').classList.add('hidden');
     $('arena-hud').classList.add('hidden');
@@ -379,6 +381,7 @@ export class Hud {
   }
 
   showGameOver(game) {
+    $('quit-confirm').hidden = true;
     this.updatePlayers(game);
     const list = $('standings');
     list.innerHTML = '';
@@ -473,9 +476,22 @@ export class Hud {
       e.currentTarget.textContent = on ? '🔊' : '🔇';
     };
     $('btn-cam').onclick = () => h.onCamera();
-    $('btn-menu').onclick = () => {
-      if (confirm('Quit this game and return to the menu?')) h.onMenu();
+    // Quitting asks first, in the page itself (embedded views refuse the browser's confirm dialog).
+    const ask = $('quit-confirm');
+    const closeAsk = () => (ask.hidden = true);
+    $('btn-menu').onclick = (e) => {
+      e.stopPropagation();
+      ask.hidden = !ask.hidden;
+      if (!ask.hidden) $('btn-quit-no').focus();
     };
+    $('btn-quit-yes').onclick = () => {
+      closeAsk();
+      h.onMenu();
+    };
+    $('btn-quit-no').onclick = closeAsk;
+    for (const el of [ask, $('btn-menu')]) el.addEventListener('pointerdown', (e) => e.stopPropagation());
+    window.addEventListener('pointerdown', closeAsk);
+    window.addEventListener('keydown', (e) => e.key === 'Escape' && closeAsk());
     $('btn-menu2').onclick = () => h.onMenu();
     $('btn-again').onclick = () => h.onStart(this.players());
   }

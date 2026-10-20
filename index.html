@@ -100,7 +100,14 @@
           <button id="btn-speed" class="tool" title="Animation speed">1×</button>
           <button id="btn-sound" class="tool" title="Sound on/off">🔊</button>
           <button id="btn-cam" class="tool" title="Reset camera">🎥</button>
-          <button id="btn-menu" class="tool" title="Quit to menu">☰</button>
+          <button id="btn-menu" class="tool" title="Quit to menu" aria-haspopup="dialog" aria-controls="quit-confirm">☰</button>
+        </div>
+      </div>
+      <div id="quit-confirm" class="quit-confirm" role="dialog" aria-labelledby="quit-q" hidden>
+        <p id="quit-q">Quit this game and go back to the menu?</p>
+        <div class="quit-actions">
+          <button id="btn-quit-yes" class="btn small primary">Quit</button>
+          <button id="btn-quit-no" class="btn small ghost">Keep playing</button>
         </div>
       </div>
       <div class="hud-bottom">

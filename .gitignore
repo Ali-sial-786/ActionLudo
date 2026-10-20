@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-artifact/
 .DS_Store
 *.log
 .claude/worktrees/
