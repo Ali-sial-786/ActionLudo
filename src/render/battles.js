@@ -504,105 +504,232 @@ async function cobra(ctx) {
   });
 }
 
+// ------------------------------------------------------------------ staging helpers for the heavy hitters (shark ... crocodile)
+// The gold gem crowning the board's centre: a big, shiny occluder when a fight happens near it.
+const HEAVY_GEM = new THREE.Vector3(0, BOARD_Y + 0.45, 0);
+
+// True when the gem would loom in the foreground of a shot (in frame, between the camera and the subject).
+function heavyGemBlocks(ctx, spec) {
+  const { pos, target } = ctx.D.pose(spec);
+  const fwd = target.clone().sub(pos);
+  const depth = fwd.length();
+  fwd.divideScalar(depth);
+  const right = new THREE.Vector3().crossVectors(fwd, UP).normalize();
+  const up = new THREE.Vector3().crossVectors(right, fwd);
+  const rel = HEAVY_GEM.clone().sub(pos);
+  const z = rel.dot(fwd);
+  if (z < 0.05 || z > depth) return false;
+  const tanV = Math.tan(THREE.MathUtils.degToRad(Math.max(34, spec.fov ?? ctx.world.camera.fov)) / 2);
+  const tanH = tanV * ctx.world.camera.aspect;
+  return (Math.abs(rel.dot(right)) - 0.4) / (z * tanH) < 1 && (Math.abs(rel.dot(up)) - 0.55) / (z * tanV) < 0.8;
+}
+
+// The shot as asked for, or the nearest variation (higher, swung round, or an orbit turned the other way) that
+// keeps the gem out of the foreground. With `to`, the whole orbit from spec.yaw to `to` is checked; the result
+// carries the (possibly changed) end yaw as `to`.
+function heavyShot(ctx, spec, to = spec.yaw) {
+  const yaw = spec.yaw ?? 0;
+  const pitch = spec.pitch ?? 18;
+  const sweep = to - yaw;
+  const s = Math.sign(yaw) || 1;
+  const tries = [];
+  for (const dp of [0, 8, 16, 24]) {
+    for (const dy of [0, -15, 15, -30, 30, -45]) {
+      for (const flip of sweep ? [false, true] : [false]) tries.push({ dp, dy: s * dy, flip, cost: dp / 8 + Math.abs(dy) / 15 + (flip ? 1.5 : 0) });
+    }
+  }
+  tries.sort((m, n) => m.cost - n.cost);
+  const samples = sweep ? [0, 0.2, 0.4, 0.6, 0.8, 1] : [0];
+  let best = null;
+  for (const t of tries) {
+    const shot = { ...spec, yaw: yaw + t.dy, pitch: pitch + t.dp, to: yaw + t.dy + (t.flip ? -sweep : sweep) };
+    const blocked = samples.filter((k) => heavyGemBlocks(ctx, { ...shot, yaw: lerp(shot.yaw, shot.to, k) })).length;
+    if (!blocked) return shot;
+    if (!best || blocked < best.blocked) best = { shot, blocked };
+  }
+  return best.shot;
+}
+
+// A view's rest bounds, measured in its model's own frame.
+function heavyBounds(view) {
+  view.root.updateMatrixWorld(true);
+  const inv = view.model.matrixWorld.clone().invert();
+  const box = new THREE.Box3();
+  const v = new THREE.Vector3();
+  view.model.traverse((m) => {
+    if (!m.isMesh || !m.visible || m.userData.noGore) return;
+    if (!m.geometry.boundingBox) m.geometry.computeBoundingBox();
+    const bb = m.geometry.boundingBox;
+    for (let i = 0; i < 8; i++) {
+      v.set(i & 1 ? bb.max.x : bb.min.x, i & 2 ? bb.max.y : bb.min.y, i & 4 ? bb.max.z : bb.min.z);
+      box.expandByPoint(v.applyMatrix4(m.matrixWorld).applyMatrix4(inv));
+    }
+  });
+  return box;
+}
+
+// Pose a model so that its own point `c` (model space) sits at `to` (its root's frame), turned by the Euler angles.
+function heavyHold(view, c, to, rx = 0, ry = 0, rz = 0) {
+  view.model.rotation.set(rx, ry, rz);
+  view.model.position.copy(to).sub(c.clone().multiply(view.model.scale).applyEuler(view.model.rotation));
+}
+
 // ------------------------------------------------------------------ SHARK: Deep Strike
 async function shark(ctx) {
   const { anim, atk, vic, sfx, dist, world, fx, D } = ctx;
   const p = atk.parts;
-  D.cut({ at: ctx.A, yaw: 40, pitch: 10, dist: 1.4, lift: 0.2, fov: 34 });
+  const shot = (spec, to) => heavyShot(ctx, spec, to);
+  const vb = heavyBounds(vic);
+  const vc = vb.getCenter(new THREE.Vector3());
+  const vicParent = vic.root.parent;
+  const vicRoot = { p: vic.root.position.clone(), q: vic.root.quaternion.clone(), s: vic.root.scale.clone() };
+  // a flick of the tail, then it slips under its own water
+  D.cut(shot({ at: ctx.A, yaw: -58, pitch: 12, dist: 1.3, lift: 0.22, fov: 34 }));
+  await anim.tween(0.2, (k) => {
+    p.body.rotation.x = -0.22 * Ease.outQuad(k);
+    p.tail.rotation.y = 0.55 * Math.sin(k * Math.PI);
+  });
   sfx.play('splash');
   fx.splash(ctx.A.clone().setY(BOARD_Y + 0.15), 0.6);
-  await anim.tween(0.5, (k) => {
-    p.body.rotation.x = 0.9 * k;
-    p.body.position.y = 0.19 - k * 0.75;
+  await anim.tween(0.32, (k) => {
+    p.body.rotation.x = lerp(-0.22, 1.05, k);
+    p.body.position.y = 0.19 - 0.8 * k;
+    p.tail.rotation.y = -0.3 * Math.sin(k * Math.PI);
   }, Ease.inQuad);
   p.body.visible = false;
-  // dark water opens under the prey
+  // dark water opens under the prey and a fin circles it
   const poolMat = new THREE.MeshStandardMaterial({ color: 0x0b2c44, transparent: true, opacity: 0.94, roughness: 0.05, metalness: 0.25 });
   const pool = new THREE.Mesh(new THREE.CircleGeometry(0.62, 48), poolMat);
   pool.rotation.x = -Math.PI / 2;
-  pool.position.copy(ctx.V).setY(BOARD_Y + 0.012);
+  // centred a touch beyond the prey, so the shark's slanting body breaks the surface inside it
+  const poolAt = ctx.V.clone().addScaledVector(ctx.dir, 0.12).setY(BOARD_Y);
+  pool.position.copy(poolAt).setY(BOARD_Y + 0.012);
   pool.scale.setScalar(0.01);
   world.transient.add(pool);
   const swirl = anim.every((dt) => (pool.rotation.z += dt * 3));
   const ripples = anim.every(() => {
-    if (Math.random() < 0.06) fx.ring(ctx.V, { color: 0x9cc6da, from: 0.15, to: 0.62, duration: 0.7, y: BOARD_Y + 0.02, opacity: 0.5 });
+    if (Math.random() < 0.05) fx.ring(poolAt, { color: 0x9cc6da, from: 0.15, to: 0.62, duration: 0.7, y: BOARD_Y + 0.02, opacity: 0.5 });
   });
-  D.cut({ at: ctx.V, yaw: 65, pitch: 9, dist: 1.5, lift: 0.25, fov: 32 });
+  D.cut(shot({ at: ctx.V, yaw: 52, pitch: 15, dist: 1.6, lift: 0.22, fov: 34 }));
   sfx.play('dunDun');
-  await anim.tween(0.45, (k) => pool.scale.setScalar(Ease.outCubic(k)));
+  await anim.tween(0.4, (k) => pool.scale.setScalar(Ease.outCubic(k)));
   const finMat = atk.meshes().find((m) => m.material.side === THREE.DoubleSide)?.material ?? new THREE.MeshStandardMaterial({ color: 0x485866 });
   const fin = new THREE.Mesh(new THREE.ConeGeometry(0.15, 0.42, 4), finMat);
   fin.scale.set(0.3, 1, 1);
   fin.castShadow = true;
   world.transient.add(fin);
   const look0 = vic.model.rotation.y;
+  const head = vic.parts.head;
+  const head0 = head?.rotation.y ?? 0;
+  const face = vic.root.rotation.y;
   sfx.play('heartbeat');
-  await anim.tween(1.5, (k) => {
-    const a = k * Math.PI * 4;
-    const r = 0.52 - k * 0.12;
-    fin.position.set(ctx.V.x + Math.cos(a) * r, BOARD_Y + 0.17, ctx.V.z + Math.sin(a) * r);
+  // slow push-in while the prey's eyes follow the fin
+  D.move(shot({ at: ctx.V, yaw: 36, pitch: 10, dist: 1.35, lift: 0.25 }), 1.3, Ease.inOutSine);
+  await anim.tween(1.3, (k) => {
+    const a = k * Math.PI * 3.4 + 0.6;
+    const r = 0.52 - k * 0.1;
+    fin.position.set(poolAt.x + Math.cos(a) * r, BOARD_Y + 0.16, poolAt.z + Math.sin(a) * r);
     fin.rotation.y = -a;
-    if (Math.random() < 0.5) fx.burst(fin.position.clone().setY(BOARD_Y + 0.03), { count: 3, colors: [0xdfeef5, 0x9cc6da], shape: 'sphere', speed: 0.4, up: 0.4, gravity: 3, size: [0.006, 0.012], life: [0.3, 0.5] });
-    vic.model.rotation.y = look0 + Math.sin(k * 18) * 0.35;
-    if (k > 0.7 && Math.random() < 0.1) sfx.play('heartbeat');
+    if (Math.random() < 0.4) fx.burst(fin.position.clone().setY(BOARD_Y + 0.03), { count: 3, colors: [0xdfeef5, 0x9cc6da], shape: 'sphere', speed: 0.4, up: 0.4, gravity: 3, size: [0.006, 0.012], life: [0.3, 0.5] });
+    const look = Math.sin(Math.atan2(fin.position.x - ctx.V.x, fin.position.z - ctx.V.z) - face);
+    vic.model.rotation.y = look0 + 0.3 * look;
+    if (head) head.rotation.y = head0 + 0.45 * look;
+    if (k > 0.7 && Math.random() < 0.08) sfx.play('heartbeat');
   });
   fin.removeFromParent();
   fin.geometry.dispose();
-  // ERUPTION — jaws first, in slow motion
-  setZ(atk, dist, -0.9);
-  atk.model.rotation.set(-Math.PI / 2, 0, 0);
+  // ERUPTION: it bursts up behind the prey and clamps its hindquarters, in slow motion. Shark and prey both
+  // stay in profile: the shark rears up facing back the way it came, the prey hanging out of its jaws.
   p.body.visible = true;
   p.body.position.y = 0.19;
-  p.body.rotation.x = 0;
-  p.body.scale.setScalar(1.5);
+  p.body.rotation.set(0, 0, 0);
+  p.body.scale.setScalar(1.6);
   p.water.visible = false;
   p.foam.visible = false;
-  killcam(ctx, { at: ctx.V, yaw: 35, pitch: 4, dist: 1.6, lift: 0.7, fov: 34 }, 0.25, 0.9);
+  p.tail.rotation.y = 0;
+  const mouth = new THREE.Object3D();
+  p.body.add(mouth);
+  mouth.position.set(0, -0.07, 0.15);
+  const lean = 0.22;
+  const breach = new THREE.Quaternion().setFromAxisAngle(UP, Math.PI).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), lean - Math.PI / 2));
+  const nose = new THREE.Vector3(0, 0, 1).applyQuaternion(breach);
+  const nod = new THREE.Quaternion();
+  const pose = (a = 0) => atk.model.quaternion.copy(breach).multiply(nod.setFromAxisAngle(new THREE.Vector3(1, 0, 0), a));
+  pose();
+  atk.model.position.set(0, 0, 0);
+  atk.root.updateMatrixWorld(true);
+  vic.root.updateMatrixWorld(true);
+  const grip = vic.model.localToWorld(new THREE.Vector3(vc.x, lerp(vb.min.y, vb.max.y, 0.5), lerp(vb.min.z, vb.max.z, 0.35)));
+  const base = atk.root.worldToLocal(grip.clone()).sub(atk.root.worldToLocal(wpos(mouth)));
+  const rise = (y) => atk.model.position.copy(base).addScaledVector(nose, y);
+  rise(-1.2);
+  killcam(ctx, shot({ at: ctx.V, yaw: 12, pitch: 5, dist: 1.75, lift: 0.45, fov: 34 }), 0.25, 0.9);
   sfx.play('splash');
   sfx.play('roar', { pitch: 0.5 });
-  fx.splash(ctx.V.clone().setY(BOARD_Y + 0.2), 1.4);
-  await anim.tween(0.32, (k) => {
-    atk.model.position.y = lerp(-0.9, 0.85, Ease.outQuad(k));
-    p.jaw.rotation.x = 1.1 * k;
-    vic.root.position.y = BOARD_Y + k * 1.05;
-    vic.model.rotation.x = k * 0.7;
-  });
-  // CHOMP — teeth through the middle
-  await anim.tween(0.08, (k) => (p.jaw.rotation.x = 1.1 * (1 - k * 0.7)));
-  hit(ctx, bodyPoint(vic, 0.25), { count: 80, wound: 0.07, sound: 'crunch', impact: 1.2, mist: 1 });
-  // thrash, turning the water red
-  const stop = D.track({ at: () => bodyPoint(vic, 0.0), yaw: 50, pitch: 10, dist: 1.5, lift: 0.0 }, 7);
+  fx.splash(grip.clone().setY(BOARD_Y + 0.2), 1.3);
+  await anim.tween(0.14, (k) => {
+    rise(lerp(-1.2, 0, k));
+    p.jaw.rotation.x = 1.0 * Math.min(1, k * 1.6);
+  }, Ease.outQuad);
+  // CHOMP: the jaws slam shut and it is hauled up out of the water, front end dangling
+  await anim.tween(0.05, (k) => (p.jaw.rotation.x = lerp(1.0, 0.4, k)));
+  hit(ctx, grip, { count: 40, wound: 0.06, sound: 'crunch', impact: 1.1, mist: 0.8 });
+  mouth.attach(vic.root);
+  const gripV = vic.model.worldToLocal(grip.clone());
+  const gripRoot = gripV.clone().add(vic.model.position);
+  const ry0 = vic.model.rotation.y;
   await Promise.all([
-    anim.tween(1.0, (k, raw) => {
-      atk.model.rotation.z = Math.sin(raw * 35) * 0.5;
-      vic.root.position.x += Math.sin(raw * 35) * 0.004;
-      poolMat.color.lerp(new THREE.Color(0x4a0408), 0.03);
-      if (Math.random() < 0.5) ctx.gore.spray(bodyPoint(vic, 0.2), new THREE.Vector3(rand(-1, 1), 0.6, rand(-1, 1)), { count: 6, speed: 2.4 });
-      if (Math.random() < 0.06) sfx.play('splash');
-    }),
-    struggle(ctx, vic, 1.0, 1.3, true),
+    struggle(ctx, vic, 0.26, 1.1),
+    anim.tween(0.26, (k) => {
+      rise(0.24 * k);
+      heavyHold(vic, gripV, gripRoot, 0.3 * k, lerp(ry0, 0, k), 0);
+    }, Ease.outCubic),
   ]);
-  stop();
-  atk.model.rotation.z = 0;
+  // shakes it like a rag, the water turning red
+  const red = new THREE.Color(0x4a0408);
+  let from = 0;
+  for (const to of [0.3, -0.26, 0.16, 0]) {
+    const a = from;
+    sfx.play(to ? 'squelch' : 'splash');
+    await Promise.all([
+      struggle(ctx, vic, 0.17, 0.9),
+      anim.tween(0.17, (k) => {
+        pose(lerp(a, to, k));
+        if (ctx.gore.on) poolMat.color.lerp(red, 0.05);
+      }, Ease.inOutSine),
+    ]);
+    if (to) ctx.gore.spray(wpos(mouth), ctx.dir.clone().multiplyScalar(Math.sign(to)).setY(0.6), { count: 16, speed: 2.2 });
+    from = to;
+  }
   // bites clean through
-  killcam(ctx, { at: () => bodyPoint(vic, 0.0), yaw: 45, pitch: 6, dist: 1.4, lift: 0.0, fov: 32 }, 0.15, 1.3);
-  await anim.tween(0.08, (k) => (p.jaw.rotation.x = 0.33 * (1 - k)));
-  finish(ctx, { mode: 'halves', axis: 'z', power: 1.8, up: 0.8 });
-  sfx.play('splash');
+  killcam(ctx, shot({ at: ctx.V, yaw: 46, pitch: 9, dist: 1.65, lift: 0.45, fov: 34 }), 0.15, 1.1);
+  await anim.tween(0.1, (k) => (p.jaw.rotation.x = lerp(0.4, 0.9, k)), Ease.outQuad);
+  await anim.tween(0.05, (k) => (p.jaw.rotation.x = lerp(0.9, 0, k)), Ease.inQuad);
+  vicParent.attach(vic.root);
+  finish(ctx, { mode: 'halves', axis: 'z', power: 1.6, up: 0.5 });
+  // and drops back into the deep
+  const top = atk.model.position.clone();
+  let splashed = false;
+  const orbit = shot({ at: ctx.V, yaw: 46, pitch: 12, dist: 1.75, lift: 0.3 }, 76);
   await Promise.all([
-    D.orbit({ at: ctx.V, yaw: 42, pitch: 8, dist: 1.6, lift: 0.6 }, 160, 1.6),
-    anim.tween(0.6, (k) => {
-      atk.model.position.y = 0.07 + arc(k, 0.4) + (1 - k) * 0.78 - k * 0.95;
-      atk.model.rotation.x = lerp(-Math.PI / 2, Math.PI * 0.6, k);
-    }),
+    D.orbit(orbit, orbit.to, 1.4),
+    anim.tween(0.45, (k) => {
+      atk.model.position.copy(top).addScaledVector(nose, -1.3 * k);
+      if (k > 0.3 && !splashed) {
+        splashed = true;
+        sfx.play('splash');
+        fx.splash(ctx.V.clone().setY(BOARD_Y + 0.15), 1);
+      }
+    }, Ease.inQuad),
   ]);
-  sfx.play('splash');
   // resurfaces on the square
+  mouth.removeFromParent();
   atk.model.rotation.set(0, 0, 0);
   p.body.scale.setScalar(1);
   p.water.visible = true;
   p.foam.visible = true;
-  setZ(atk, dist, -0.5);
+  atk.model.position.set(0, -0.5, dist);
+  sfx.play('splash');
   await anim.tween(0.5, (k) => {
     atk.model.position.y = lerp(-0.5, 0.07, Ease.outCubic(k));
     pool.scale.setScalar(1 - k);
@@ -612,7 +739,9 @@ async function shark(ctx) {
   pool.removeFromParent();
   pool.geometry.dispose();
   poolMat.dispose();
-  vic.root.position.y = BOARD_Y;
+  vic.root.position.copy(vicRoot.p);
+  vic.root.quaternion.copy(vicRoot.q);
+  vic.root.scale.copy(vicRoot.s);
 }
 
 // ------------------------------------------------------------------ GORILLA: Pulverize
