@@ -11,6 +11,7 @@ import {
   trackIndexOf,
 } from '../game/board.js';
 import { COLORS } from '../config.js';
+import { woodTexture } from './surfaces.js';
 
 export const BOARD_Y = 0.12;
 
@@ -99,7 +100,7 @@ const BOARD_THEMES = {
   action: {
     tile: [0xf5efe3, 0.7, 0],
     grout: [0x2a1d14, 0.9, 0],
-    frame: [0x6b4428, 0.55, 0.05],
+    frame: [0x8a5a38, 0.55, 0.05],
     star: [0x9aa3b5, 0.4, 0.4],
     pad: [0xf8f4ec, 0.75, 0],
     team: 0.55,
@@ -148,6 +149,12 @@ export class BoardView {
       m.roughness = roughness;
       m.metalness = metalness;
     }
+    // wood grain on the frame in Action; the Kids toy board is smooth painted plastic
+    const grain = theme === 'kids' ? null : (this.frameGrain ??= Object.assign(woodTexture().clone(), { repeat: new THREE.Vector2(4, 1) }));
+    if (this.mats.frame.map !== grain) {
+      this.mats.frame.map = grain;
+      this.mats.frame.needsUpdate = true;
+    }
     COLORS.forEach((c, i) => {
       this.teamMats[i].roughness = t.team;
       // yard spots: a deeper shade in Action, a soft pastel tint in Kids
@@ -171,15 +178,17 @@ export class BoardView {
     const base = this.add(new THREE.Mesh(new THREE.BoxGeometry(15.2, 0.5, 15.2), mats.grout));
     base.position.y = -0.25;
 
-    // Raised wooden frame.
+    // Raised wooden frame. The east/west rails fit between the north/south ones, so no faces
+    // overlap at the corners.
     const frameGeoLong = new THREE.BoxGeometry(16.2, 0.55, 0.5);
+    const frameGeoShort = new THREE.BoxGeometry(15.2, 0.55, 0.5);
     for (const [x, z, rot] of [
       [0, -7.85, 0],
       [0, 7.85, 0],
       [-7.85, 0, Math.PI / 2],
       [7.85, 0, Math.PI / 2],
     ]) {
-      const f = this.add(new THREE.Mesh(frameGeoLong, mats.frame), true);
+      const f = this.add(new THREE.Mesh(rot ? frameGeoShort : frameGeoLong, mats.frame), true);
       f.position.set(x, -0.1, z);
       f.rotation.y = rot;
     }

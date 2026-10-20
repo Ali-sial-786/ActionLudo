@@ -29,13 +29,16 @@ import { Gore } from '../render/gore.js';
 import { Chain, arcPoints, circlePoints } from '../render/chains.js';
 import { Ease, arc, clamp, lerp } from '../engine/anim.js';
 
+// Pieces sharing a square shrink and spread out so their bases sit side by side, not overlapping.
 const STACK_OFFSETS = {
   1: [[0, 0]],
-  2: [[-0.2, -0.2], [0.2, 0.2]],
-  3: [[-0.2, -0.18], [0.2, -0.18], [0, 0.2]],
-  4: [[-0.2, -0.2], [0.2, -0.2], [-0.2, 0.2], [0.2, 0.2]],
+  2: [[-0.21, -0.21], [0.21, 0.21]],
+  3: [[-0.22, -0.19], [0.22, -0.19], [0, 0.21]],
+  4: [[-0.22, -0.22], [0.22, -0.22], [-0.22, 0.22], [0.22, 0.22]],
+  5: [[-0.25, -0.25], [0.25, -0.25], [0, 0], [-0.25, 0.25], [0.25, 0.25]],
+  6: [[-0.28, -0.2], [0, -0.2], [0.28, -0.2], [-0.28, 0.2], [0, 0.2], [0.28, 0.2]],
 };
-const STACK_SCALE = { 1: 1, 2: 0.74, 3: 0.64, 4: 0.6 };
+const STACK_SCALE = { 1: 1, 2: 0.72, 3: 0.56, 4: 0.55, 5: 0.45, 6: 0.37 };
 const YARD_SCALE = 0.86;
 const FINISH_SCALE = 0.6;
 
@@ -166,12 +169,14 @@ export class GameController {
     const key = squareKey(token.seat, token.progress);
     const group = this.game.tokens.filter((t) => t.progress >= 0 && t.progress < FINISH_PROGRESS && squareKey(t.seat, t.progress) === key);
     group.sort((a, b) => (a.id < b.id ? -1 : 1));
-    const n = Math.min(4, group.length);
-    const i = Math.min(3, group.indexOf(token));
+    const n = Math.min(6, group.length);
+    const i = Math.min(5, group.indexOf(token));
     const [ox, oz] = STACK_OFFSETS[n][i % n];
     const pos = this.squarePos(token.seat, token.progress);
     pos.x += ox;
     pos.z += oz;
+    // any bases that still touch layer cleanly instead of flickering
+    pos.y += i * 0.002;
     return { pos, scale: STACK_SCALE[n], rot: this.facingFor(token) };
   }
 

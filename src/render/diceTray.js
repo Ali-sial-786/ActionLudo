@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { COLORS } from '../config.js';
+import { feltTexture, woodTexture } from './surfaces.js';
 
 // Felt-lined dice trays out on the table, one beside each player's yard. The die is thrown into
 // the current player's tray; the tray's inner walls are the physics bounds of the throw.
@@ -18,7 +19,7 @@ export function trayBounds(seat) {
 }
 
 const THEMES = {
-  action: { wood: [0x5a3920, 0.55], felt: (c) => c.multiplyScalar(0.32), feltRough: 1 },
+  action: { wood: [0x6e4628, 0.55], felt: (c) => c.multiplyScalar(0.36), feltRough: 1, textured: true },
   kids: { wood: [0xfff4e6, 0.5], felt: (c) => c.lerp(new THREE.Color(0xffffff), 0.35), feltRough: 0.9 },
 };
 
@@ -62,9 +63,20 @@ export class DiceTrays {
     const t = THEMES[theme] ?? THEMES.action;
     this.wood.color.setHex(t.wood[0]);
     this.wood.roughness = t.wood[1];
+    // wood grain and a felt weave in Action; plain painted toy trays in Kids
+    const grain = t.textured ? woodTexture() : null;
+    if (this.wood.map !== grain) {
+      this.wood.map = grain;
+      this.wood.needsUpdate = true;
+    }
+    const weave = t.textured ? feltTexture() : null;
     for (const tray of this.trays) {
       tray.felt.color.copy(t.felt(new THREE.Color(tray.color)));
       tray.felt.roughness = t.feltRough;
+      if (tray.felt.map !== weave) {
+        tray.felt.map = weave;
+        tray.felt.needsUpdate = true;
+      }
     }
   }
 
