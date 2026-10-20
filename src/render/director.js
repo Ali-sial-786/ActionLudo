@@ -62,19 +62,28 @@ export class Director {
     return list;
   }
 
-  // Whether the line from a shot's subject to the camera runs through one of the blockers.
+  // Whether something stands between the camera and the subject: the line of sight, and the nearer
+  // part of the lines to points half way out to either side of the frame, so a blocker close to the
+  // camera cannot fill a corner either (pieces standing beside the subject are fine).
   blocked({ pos, target }) {
     if (!this.blockers) return false;
     const len = pos.distanceTo(target);
+    const side = UP.clone().cross(pos.clone().sub(target)).setY(0);
+    if (side.lengthSq() > 1e-6) side.normalize().multiplyScalar(len * Math.tan(this.world.camera.fov * DEG * 0.5) * this.world.camera.aspect * 0.5);
     const q = new THREE.Vector3();
-    for (let s = 0.3; s <= len + 0.05; s += 0.08) {
-      q.lerpVectors(target, pos, Math.min(1, s / len));
-      for (const b of this.blockers) {
-        if (q.y < b.top && (q.x - b.x) ** 2 + (q.z - b.z) ** 2 < (b.r + CLEARANCE) ** 2) return true;
+    const aim = new THREE.Vector3();
+    for (const k of [0, 1, -1]) {
+      aim.copy(target).addScaledVector(side, k);
+      for (let s = k ? len * 0.4 : 0.3; s <= len + 0.05; s += 0.08) {
+        q.lerpVectors(aim, pos, Math.min(1, s / len));
+        for (const b of this.blockers) {
+          if (q.y < b.top && (q.x - b.x) ** 2 + (q.z - b.z) ** 2 < (b.r + CLEARANCE) ** 2) return true;
+        }
       }
     }
     return false;
   }
+
 
   // The shot itself, or the nearest variation of it (swung round and/or raised) with a clear view.
   dodge(spec) {
