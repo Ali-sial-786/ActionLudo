@@ -1090,79 +1090,111 @@ async function scorpion(ctx) {
 async function crocodile(ctx) {
   const { anim, atk, vic, sfx, dist, D } = ctx;
   const p = atk.parts;
-  // eye-level with the board, jaws easing open
-  const stop = D.track({ at: () => wpos(atk.parts.head), yaw: 50, pitch: 2, dist: 1.0, lift: 0.0 }, 6);
-  ctx.world.setFov(30);
+  const shot = (spec, to) => heavyShot(ctx, spec, to);
+  const vb = heavyBounds(vic);
+  const vc = vb.getCenter(new THREE.Vector3());
+  const rest = vc.clone().add(vic.model.position);
+  const vicParent = vic.root.parent;
+  const vicRoot = { p: vic.root.position.clone(), q: vic.root.quaternion.clone(), s: vic.root.scale.clone() };
+  atk.root.updateMatrixWorld(true);
+  vic.root.updateMatrixWorld(true);
+  const inVic = (x, y, z) => vic.root.worldToLocal(atk.root.localToWorld(new THREE.Vector3(x, y, z)));
+  const tail0 = p.tail.map((s) => s.rotation.y);
+  // low two-shot: it glides in, jaws easing open
+  const start = dist - 0.95;
+  const bite = dist - 0.7;
+  D.cut(shot({ at: ctx.A.clone().lerp(ctx.V, 0.5), yaw: 20, pitch: 6, dist: 1.6, lift: 0.27, fov: 34 }));
   sfx.play('growl', { pitch: 0.6, dur: 1.2 });
-  await anim.tween(1.0, (k, raw) => {
-    setZ(atk, lerp(0, dist - 0.78, k), 0);
-    p.jaw.rotation.x = 0.85 * k;
-    p.head.rotation.x = -0.3 * k;
-    p.legs.forEach((leg, i) => (leg.rotation.y = Math.sin(raw * 16 + i * 1.6) * 0.35));
-    p.tail.forEach((seg, i) => (seg.rotation.y = 0.32 + Math.sin(raw * 9 - i) * 0.3));
+  await anim.tween(0.9, (k) => {
+    const e = Ease.inOutQuad(k);
+    setZ(atk, lerp(0, start, e), 0);
+    p.jaw.rotation.x = 0.85 * e;
+    p.head.rotation.x = -0.3 * e;
+    p.legs.forEach((leg, i) => (leg.rotation.y = Math.sin(k * 16 + i * 1.6) * 0.35 * Math.sin(k * Math.PI)));
+    p.tail.forEach((seg, i) => (seg.rotation.y = tail0[i] + Math.sin(k * 9 - i) * 0.25));
   });
-  stop();
   // SNAP
-  killcam(ctx, { at: ctx.V, yaw: 50, pitch: 8, dist: 1.1, lift: 0.25, fov: 30 }, 0.25, 0.6);
-  await anim.tween(0.1, (k) => {
-    setZ(atk, lerp(dist - 0.78, dist - 0.55, k), 0);
-    p.jaw.rotation.x = lerp(0.85, 0.12, k);
-    p.head.rotation.x = lerp(-0.3, 0, k);
-  });
-  hit(ctx, bodyPoint(vic, 0.2), { count: 70, wound: 0.07, sound: 'crunch', impact: 1.2, mist: 0.9 });
-  const vicStart = vic.root.position.clone();
-  const anchor = new THREE.Group();
-  p.head.add(anchor);
-  anchor.position.set(0, 0.0, 0.3);
-  anchor.updateMatrixWorld(true);
-  const anchorW = wpos(anchor);
-  await anim.tween(0.12, (k) => {
-    vic.root.position.lerpVectors(vicStart, anchorW.clone().setY(BOARD_Y + 0.02), k);
-    vic.model.rotation.x = -0.4 * k;
-  });
-  anchor.attach(vic.root);
-  // DEATH ROLL — blood flung off in a spinning ring
+  killcam(ctx, shot({ at: ctx.A.clone().lerp(ctx.V, 0.75), yaw: 40, pitch: 10, dist: 1.3, lift: 0.25, fov: 34 }), 0.25, 0.6);
+  await anim.tween(0.08, (k) => {
+    setZ(atk, lerp(start, bite, k), 0);
+    p.jaw.rotation.x = lerp(0.85, 0.1, k);
+    p.head.rotation.x = lerp(-0.3, 0.05, k);
+  }, Ease.inQuad);
+  const chest = vic.model.localToWorld(new THREE.Vector3(vc.x, lerp(vb.min.y, vb.max.y, 0.4), lerp(vc.z, vb.max.z, 0.55)));
+  hit(ctx, chest, { count: 45, wound: 0.07, sound: 'crunch', impact: 1.2, mist: 0.8 });
+  // dragged down and twisted onto its side, its middle on the line the roll turns about
+  const axisY = 0.26;
+  const onAxis = inVic(0, axisY, bite + 0.3 + (vb.max.z - vc.z) * 0.75);
+  await Promise.all([
+    struggle(ctx, vic, 0.16, 1),
+    anim.tween(0.16, (k) => heavyHold(vic, vc, rest.clone().lerp(onAxis, k), 0, 0, (Math.PI / 2) * k), Ease.outQuad),
+  ]);
+  atk.model.attach(vic.root);
+  // DEATH ROLL: crocodile and prey spin together about one axis, blood flung off in a ring
   sfx.play('splash');
   sfx.play('roar', { pitch: 0.45 });
-  D.cut({ at: ctx.V, yaw: 30, pitch: 18, dist: 1.5, lift: 0.2, fov: 32 });
+  const pivot = new THREE.Vector3(0, axisY - 0.07, 0);
   const fling = anim.every(() => {
-    if (Math.random() < 0.6) {
+    if (Math.random() < 0.5) {
       const a = Math.random() * Math.PI * 2;
-      ctx.gore.spray(bodyPoint(vic, 0.1), new THREE.Vector3(Math.cos(a), 0.4, Math.sin(a)), { count: 6, speed: 2.6, spread: 0.3 });
+      ctx.gore.spray(vic.model.localToWorld(vc.clone()), new THREE.Vector3(Math.cos(a), 0.4, Math.sin(a)), { count: 5, speed: 2.4, spread: 0.3 });
     }
   });
+  // swinging round towards the crocodile's side, so it stays in front of its prey
+  const orbit = shot({ at: ctx.V.clone().addScaledVector(ctx.dir, -0.3), yaw: 12, pitch: 10, dist: 1.4, lift: 0.26 }, -32);
+  D.cut(orbit);
   await Promise.all([
-    anim.tween(1.2, (k) => {
-      atk.model.rotation.z = Ease.inOutQuad(k) * Math.PI * 6;
-      atk.model.position.y = 0.07 + Math.abs(Math.sin(k * Math.PI * 6)) * 0.1;
-      if (Math.random() < 0.08) {
-        ctx.world.shake(0.12);
+    anim.tween(1.1, (k) => {
+      heavyHold(atk, pivot, new THREE.Vector3(0, axisY + arc(k, 0.08), bite), 0, 0, Ease.inOutCubic(k) * Math.PI * 4);
+      p.legs.forEach((leg, i) => (leg.rotation.y = (i % 4 < 2 ? 1 : -1) * 0.9 * Math.sin(k * Math.PI)));
+      p.tail.forEach((seg, i) => (seg.rotation.y = lerp(tail0[i], 0, Math.sin(k * Math.PI))));
+      if (Math.random() < 0.06) {
+        ctx.world.shake(0.1);
         sfx.play('squelch');
       }
     }),
-    D.orbit({ at: ctx.V, yaw: 30, pitch: 18, dist: 1.5, lift: 0.2 }, 110, 1.2),
+    D.orbit(orbit, orbit.to, 1.1),
   ]);
   fling();
-  atk.model.rotation.z = 0;
-  atk.model.position.y = 0.07;
-  // violent head thrash tears it to pieces
-  await anim.tween(0.45, (k, raw) => {
-    p.head.rotation.y = Math.sin(raw * 26) * 0.7;
-    p.body.rotation.y = -Math.sin(raw * 26) * 0.18;
-    if (Math.random() < 0.4) ctx.gore.spray(bodyPoint(vic, 0.1), new THREE.Vector3(rand(-1, 1), 0.5, rand(-1, 1)), { count: 6, speed: 2.2 });
-  });
-  killcam(ctx, { at: ctx.V, yaw: 42, pitch: 10, dist: 1.25, lift: 0.2, fov: 30 }, 0.15, 1.3);
-  ctx.world.transient.attach(vic.root);
-  p.head.remove(anchor);
-  finish(ctx, { mode: 'limbs', power: 2.6, up: 1.2 });
-  await D.orbit({ at: ctx.V, yaw: 42, pitch: 10, dist: 1.4, lift: 0.2 }, 165, 1.6);
-  vic.root.position.copy(vicStart);
-  await anim.tween(0.45, (k) => {
-    p.head.rotation.y = 0;
-    p.body.rotation.y = 0;
-    p.jaw.rotation.x = 0.12 + 0.5 * Math.sin(k * Math.PI);
-    setZ(atk, lerp(dist - 0.55, dist, k), 0);
-  });
+  heavyHold(atk, pivot, new THREE.Vector3(0, axisY, bite), 0, 0, 0);
+  // two savage whips of the head tear it apart
+  p.head.attach(vic.root);
+  let from = 0;
+  for (const to of [0.55, -0.55]) {
+    const a = from;
+    await anim.tween(0.15, (k) => {
+      p.head.rotation.y = lerp(a, to, k);
+      p.body.rotation.y = -0.25 * lerp(a, to, k);
+    }, Ease.inOutSine);
+    sfx.play('squelch');
+    ctx.gore.spray(vic.model.localToWorld(vc.clone()), new THREE.Vector3(-Math.sign(to) * ctx.dir.z, 0.5, Math.sign(to) * ctx.dir.x), { count: 14, speed: 2.2 });
+    ctx.world.shake(0.12);
+    from = to;
+  }
+  killcam(ctx, shot({ at: ctx.V.clone().addScaledVector(ctx.dir, -0.15), yaw: 40, pitch: 12, dist: 1.45, lift: 0.25, fov: 34 }), 0.15, 1.2);
+  await anim.tween(0.1, (k) => {
+    p.head.rotation.y = lerp(-0.55, 0.3, k);
+    p.body.rotation.y = lerp(0.14, -0.08, k);
+  }, Ease.inQuad);
+  vicParent.attach(vic.root);
+  finish(ctx, { mode: 'limbs', power: 1.5, up: 1.0 });
+  vic.root.position.copy(vicRoot.p);
+  vic.root.quaternion.copy(vicRoot.q);
+  vic.root.scale.copy(vicRoot.s);
+  // a last snap of the jaws, then it slides onto the square as the camera swings round
+  const after = shot({ at: ctx.V.clone().addScaledVector(ctx.dir, -0.15), yaw: 40, pitch: 18, dist: 1.55, lift: 0.22 }, 95);
+  await Promise.all([
+    D.orbit(after, after.to, 1.5),
+    anim.wait(0.6).then(() =>
+      anim.tween(0.55, (k) => {
+        p.head.rotation.y = lerp(0.3, 0, k);
+        p.body.rotation.y = lerp(-0.08, 0, k);
+        p.head.rotation.x = lerp(0.05, 0, k);
+        p.jaw.rotation.x = 0.1 + 0.45 * Math.sin(k * Math.PI);
+        setZ(atk, lerp(bite, dist, Ease.inOutQuad(k)), 0);
+      }),
+    ),
+  ]);
 }
 
 export const ATTACKS = { eagle, tiger, wolf, bear, cobra, shark, gorilla, rhino, scorpion, crocodile };
