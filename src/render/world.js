@@ -8,6 +8,7 @@ import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { Animator, Ease, lerp } from '../engine/anim.js';
 import { KID_SKY, buildKidScenery, makeGinghamTexture, makeGrassTexture } from './scenery.js';
+import { ARENA_SKY, buildArenaScenery, makeArenaGround } from './arena.js';
 
 // Battle colour grade.
 //   amount: Action kill-cam — desaturate, crush, vignette, film grain.
@@ -31,7 +32,8 @@ const GradeShader = {
       float l = dot(col, vec3(0.2126, 0.7152, 0.0722));
       col = mix(col, vec3(l), 0.32 * amount);
       col *= mix(vec3(1.0), vec3(1.06, 0.96, 0.9), amount);
-      col = mix(col, (col - 0.18) * 1.18 + 0.18, amount);
+      // more contrast, but with a toe: the night arena behind a fight stays faintly visible
+      col = mix(col, max((col - 0.18) * 1.18 + 0.18, col * 0.5), amount);
       vec2 d = (vUv - 0.5) * vec2(1.0, 0.85);
       float v = smoothstep(0.78, 0.18, length(d));
       col *= mix(1.0, 0.25 + 0.75 * v, amount);
@@ -48,13 +50,13 @@ const GradeShader = {
     }`,
 };
 
-// Scene look per game mode. Action: dusky, moody arena. Kids: a sunny picnic in the park.
+// Scene look per game mode. Action: a moonlit jungle arena. Kids: a sunny picnic in the park.
 const THEMES = {
   action: {
     toneMapping: THREE.ACESFilmicToneMapping,
     exposure: 0.98,
-    fog: 0x1b2440,
-    fogRange: [1.1, 2.6],
+    fog: ARENA_SKY.fog,
+    fogRange: [1.3, 3.4],
     hemiSky: 0xcfe3ff,
     hemiGround: 0x3a2a1a,
     hemi: 1.25,
@@ -108,9 +110,8 @@ export class World {
     this.shadowSize = hiDetail(renderer) ? 4096 : 2048;
 
     const scene = new THREE.Scene();
-    this.skyTexture = makeSkyTexture();
-    scene.background = this.skyTexture;
-    scene.fog = new THREE.Fog(0x1b2440, 38, 80);
+    scene.background = new THREE.Color(ARENA_SKY.fog);
+    scene.fog = new THREE.Fog(ARENA_SKY.fog, 38, 80);
     const pmrem = new THREE.PMREMGenerator(renderer);
     scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
     scene.environmentIntensity = 0.18;
@@ -146,6 +147,7 @@ export class World {
     this.idleOrbit = false;
     // Persistent per-frame callbacks (unaffected by Animator.reset). Receive time-scaled dt.
     this.frameFns = new Set();
+    this.onFrame((dt) => this.arenaScenery.visible && this.arenaScenery.userData.update(dt, this.camera, this.renderer));
     // Cinematic state: slow motion, post-processing strength, battle lighting mood and impact flash.
     this.slow = { target: 1, hold: 0 };
     this.post = { amount: 0, target: 0 };
@@ -217,9 +219,9 @@ export class World {
   }
 
   setupGround() {
+    const action = makeArenaGround();
     const geo = new THREE.CircleGeometry(70, 64);
-    const mat = new THREE.MeshStandardMaterial({ color: 0x2c3a2a, roughness: 1 });
-    const ground = new THREE.Mesh(geo, mat);
+    const ground = new THREE.Mesh(geo, action.ground);
     ground.rotation.x = -Math.PI / 2;
     ground.position.y = -0.62;
     ground.receiveShadow = true;
@@ -227,15 +229,16 @@ export class World {
     this.ground = ground;
 
     // Big stone table the board rests on.
-    const table = new THREE.Mesh(
-      new THREE.CylinderGeometry(15, 15.6, 0.6, 64),
-      new THREE.MeshStandardMaterial({ color: 0x5b4636, roughness: 0.85 }),
-    );
+    const table = new THREE.Mesh(new THREE.CylinderGeometry(15, 15.6, 0.6, 96), action.table);
     table.position.y = -0.62 + 0.3;
     table.receiveShadow = true;
     this.scene.add(table);
     this.table = table;
-    this.groundMats = { action: { ground: mat, table: table.material }, kids: null };
+    this.groundMats = { action, kids: null };
+
+    // the arena around it: sky, stonework, braziers and jungle (Action mode only)
+    this.arenaScenery = buildArenaScenery({ hi: this.shadowSize > 2048 });
+    this.scene.add(this.arenaScenery);
   }
 
   // Kids-mode meadow, picnic cloth and sky are only built the first time they're needed.
@@ -265,7 +268,8 @@ export class World {
     // the meadow reaches out to the hills on the horizon
     this.ground.scale.setScalar(kids ? 110 / 70 : 1);
     if (this.kidScenery) this.kidScenery.visible = kids;
-    this.scene.background = kids ? new THREE.Color(KID_SKY.horizon) : this.skyTexture;
+    this.arenaScenery.visible = !kids;
+    this.scene.background = new THREE.Color(kids ? KID_SKY.horizon : ARENA_SKY.fog);
     this.scene.fog.color.setHex(look.fog);
     this.renderer.toneMapping = look.toneMapping;
     this.renderer.toneMappingExposure = look.exposure;
@@ -596,21 +600,4 @@ const _yAxis = new THREE.Vector3(0, 1, 0);
 function hiDetail(renderer) {
   const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
   return !coarse && renderer.capabilities.maxTextureSize >= 8192;
-}
-
-function makeSkyTexture() {
-  const c = document.createElement('canvas');
-  c.width = 4;
-  c.height = 256;
-  const g = c.getContext('2d');
-  const grad = g.createLinearGradient(0, 0, 0, 256);
-  grad.addColorStop(0, '#0d1230');
-  grad.addColorStop(0.45, '#2b3f72');
-  grad.addColorStop(0.75, '#6a5b8c');
-  grad.addColorStop(1, '#1b2440');
-  g.fillStyle = grad;
-  g.fillRect(0, 0, 4, 256);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
 }
