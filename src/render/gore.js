@@ -572,32 +572,44 @@ export class Gore {
       const axisW = n.clone().transformDirection(body.matrixWorld).setY(0);
       if (axisW.lengthSq() < 0.09) axisW.set(d ? -d.z : 1, 0, d ? d.x : 0);
       axisW.normalize();
-      // the halves part along the cut and each tips outward, so the raw faces turn up to the camera
+      // the halves part along the cut, far enough to leave the middle of the square clear
       const out = 0.4 * power;
       const hop = 1.1 + 0.4 * up;
-      // each half lands lying down with its outer end tipped low, whatever angle it was cut at
+      const square = view.root.getWorldPosition(new THREE.Vector3());
       const axisN = n.clone().transformDirection(body.matrixWorld);
+      const upW = new THREE.Vector3(0, 1, 0).transformDirection(body.matrixWorld);
+      // cut across the camera's line (front / back): each half rolls onto its side with its back to
+      // the camera, outer end a little low so the cut tilts up; cut along it (left / right): each
+      // half falls outward onto its flank so the raw face turns up
+      const across = !toward || Math.abs(toward.dot(axisW)) < 0.7;
       for (const [half, s, plane] of [
         [body, 1, planeA],
         [twin, -1, planeB],
       ]) {
         const com = centerL.clone().addScaledVector(n, s * sizeL[comp] * 0.25);
-        const vel = axisW.clone().multiplyScalar(s * out).add(new THREE.Vector3(0, hop, 0));
+        const gap = body.localToWorld(com.clone()).sub(square).setY(0).dot(axisW) * s;
+        const vel = axisW.clone().multiplyScalar(s * (out + Math.max(0, 0.42 - gap - out * 0.3) / 0.3)).add(new THREE.Vector3(0, hop, 0));
         if (d) vel.addScaledVector(d, out * 0.25);
-        // each half falls on its side, back to the camera, its outer end a little low so the cut tilts up
         const from = axisN.clone().multiplyScalar(s);
-        const to = axisW.clone().multiplyScalar(s * Math.cos(0.3)).addScaledVector(Y, -Math.sin(0.3));
-        const upW = new THREE.Vector3(0, 1, 0).transformDirection(body.matrixWorld);
+        const tilt = across ? 0.3 : 1.2;
+        const to = axisW.clone().multiplyScalar(s * Math.cos(tilt)).addScaledVector(Y, -Math.sin(tilt));
+        const spin = across ? settle(half, com, vel, from, to, upW, backTo(upW)) : lieDown(half, com, vel, from, to);
         const extra = s > 0 ? {} : { twin: true, restFrom: body }; // the clone borrows the torso's rest pose
-        launch(half, bodyParent, com, vel, settle(half, com, vel, from, to, upW, backTo(upW)), { plane, bleed: 1.6, ...extra });
+        launch(half, bodyParent, com, vel, spin, { plane, bleed: 1.6, ...extra });
       }
       this.spray(centerW, axisW, { count: 34, speed: 2.4, spread: 0.5, up: 0.6 });
       this.spray(centerW, axisW.clone().negate(), { count: 34, speed: 2.4, spread: 0.5, up: 0.6 });
     } else {
-      // the torso drops and slumps onto its side, its back to the camera
+      // the torso drops and slumps onto its side, its back to the camera, sliding clear of the
+      // middle of the square where the killer is about to stand
       const upW = new THREE.Vector3(0, 1, 0).transformDirection(body.matrixWorld);
       const vel = new THREE.Vector3(0, 0.9, 0);
-      if (d) vel.addScaledVector(d, power * 0.12);
+      const square = view.root.getWorldPosition(new THREE.Vector3());
+      const off = core.clone().sub(square).setY(0);
+      const reach = off.length();
+      if (reach < 0.01) off.copy(toward ?? d ?? new THREE.Vector3(0, 0, 1)).setY(0);
+      vel.addScaledVector(off.normalize(), Math.max(0, 0.5 - reach) / 0.3);
+      if (d) vel.addScaledVector(d, power * 0.08);
       layer.attach(body);
       launch(body, bodyParent, centerL.clone(), vel, lieDown(body, centerL, vel, upW, backTo(upW)), { bleed: 1.2 });
     }

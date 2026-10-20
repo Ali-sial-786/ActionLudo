@@ -11,6 +11,8 @@ const MIN_FOV = 34;
 // How much of the frame a fitted group may fill (the action letterbox trims the top and bottom).
 const FIT_MARGIN_V = 0.74;
 const FIT_MARGIN_H = 0.85;
+// How far a line of sight keeps from a blocker (the subject is not a point, nor is the frame).
+const CLEARANCE = 0.2;
 // Yaw / pitch nudges (degrees) tried, smallest first, when something stands between a shot and its subject.
 const DODGES = [15, -15, 30, -30, 45, -45, 60, -60, 80, -80].map((y) => [y, 0]).concat([[0, 14], [20, 14], [-20, 14], [0, 28], [40, 28], [-40, 28]]);
 
@@ -68,7 +70,7 @@ export class Director {
     for (let s = 0.3; s <= len + 0.05; s += 0.08) {
       q.lerpVectors(target, pos, Math.min(1, s / len));
       for (const b of this.blockers) {
-        if (q.y < b.top && (q.x - b.x) ** 2 + (q.z - b.z) ** 2 < b.r * b.r) return true;
+        if (q.y < b.top && (q.x - b.x) ** 2 + (q.z - b.z) ** 2 < (b.r + CLEARANCE) ** 2) return true;
       }
     }
     return false;
