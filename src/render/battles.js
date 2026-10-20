@@ -872,99 +872,115 @@ async function gorilla(ctx) {
 async function rhino(ctx) {
   const { anim, atk, vic, sfx, dist, fx, D } = ctx;
   const p = atk.parts;
-  await anim.tween(0.4, (k) => setZ(atk, -0.8 * Ease.outQuad(k), 0));
-  // over the shoulder: pawing, snorting steam, head down
-  D.cut({ at: ctx.A, yaw: -150, pitch: 8, dist: 1.4, lift: 0.5, fov: 34 });
-  for (let i = 0; i < 3; i++) {
+  const shot = (spec, to) => heavyShot(ctx, spec, to);
+  const vb = heavyBounds(vic);
+  const vc = vb.getCenter(new THREE.Vector3());
+  const rest = vc.clone().add(vic.model.position);
+  atk.root.updateMatrixWorld(true);
+  vic.root.updateMatrixWorld(true);
+  const inVic = (x, y, z) => vic.root.worldToLocal(atk.root.localToWorld(new THREE.Vector3(x, y, z)));
+  // backs off for a run-up, then paws the ground, snorting
+  const back = -0.75;
+  const runup = ctx.A.clone().addScaledVector(ctx.dir, back);
+  D.cut(shot({ at: runup, yaw: 38, pitch: 7, dist: 1.25, lift: 0.25, fov: 34 }));
+  await anim.tween(0.4, (k) => {
+    setZ(atk, back * k, 0);
+    gait(p, k * 9, 0.22 * Math.sin(k * Math.PI));
+  }, Ease.outQuad);
+  for (let i = 0; i < 2; i++) {
     sfx.play('snort');
-    const nose = atk.model.localToWorld(new THREE.Vector3(0, 0.28, 0.58));
-    fx.puff(nose, { count: 4, color: 0xe8ecef, size: 0.18, spread: 0.05, rise: 0.12, opacity: 0.4 });
-    await anim.tween(0.28, (k) => {
+    fx.puff(atk.model.localToWorld(new THREE.Vector3(0, 0.26, 0.6)), { count: 4, color: 0xe8ecef, size: 0.18, spread: 0.05, rise: 0.12, opacity: 0.4 });
+    await anim.tween(0.3, (k) => {
       p.legFL.rotation.x = -0.7 * Math.sin(k * Math.PI);
-      p.head.rotation.x = 0.35 * Math.sin(k * Math.PI);
+      p.head.rotation.x = 0.35 * Math.sin(k * Math.PI) + 0.1 * i * k;
     });
     fx.dust(atk.model.localToWorld(new THREE.Vector3(0.1, 0.03, 0.2)), 6);
   }
-  // CHARGE (tracking from the side)
+  // CHARGE, seen whole from the side
   sfx.play('roar', { pitch: 0.5 });
-  const total = dist + 0.8 - 0.3;
+  const end = dist - 0.92;
+  D.cut(shot({ at: runup.clone().lerp(ctx.V, 0.55), yaw: 6, pitch: 7, dist: 1.75, lift: 0.3, fov: 34 }));
   let lastDust = 0;
-  const stop = D.track({ at: () => wpos(atk.model), yaw: 15, pitch: 5, dist: 1.8, lift: 0.3 }, 9);
-  await anim.tween(0.45, (k, raw) => {
-    setZ(atk, -0.8 + total * k, Math.abs(Math.sin(raw * 30)) * 0.04);
-    p.head.rotation.x = 0.4;
-    gait(p, raw * 40, 0.7);
+  await anim.tween(0.5, (k, raw) => {
+    setZ(atk, lerp(back, end, k), Math.abs(Math.sin(raw * Math.PI * 3.5)) * 0.03);
+    p.head.rotation.x = lerp(0.1, 0.45, Math.min(1, raw * 3));
+    gait(p, raw * 22, 0.6);
     if (raw - lastDust > 0.12) {
       lastDust = raw;
       fx.dust(atk.model.localToWorld(new THREE.Vector3(0, 0.03, -0.2)), 5);
     }
   }, Ease.inQuad);
-  stop();
+  gait(p, 0, 0);
   // the horn goes in
-  killcam(ctx, { at: ctx.V, yaw: 55, pitch: 8, dist: 1.15, lift: 0.3, fov: 30 }, 0.2, 0.8);
+  killcam(ctx, shot({ at: ctx.V.clone().addScaledVector(ctx.dir, -0.35), yaw: 50, pitch: 9, dist: 1.3, lift: 0.3, fov: 34 }), 0.2, 0.8);
   sfx.play('thud');
-  hit(ctx, bodyPoint(vic, 0.25), { count: 70, wound: 0.07, sound: 'crunch', impact: 1.2, mist: 0.9 });
-  // tossed high, trailing blood
-  const v0 = vic.root.position.clone();
-  const apex = ctx.V.clone().addScaledVector(ctx.dir, 0.7).setY(BOARD_Y + 1.8);
-  const land = ctx.V.clone().addScaledVector(ctx.dir, 0.55).setY(BOARD_Y);
+  const chest = vic.model.localToWorld(new THREE.Vector3(vc.x, lerp(vb.min.y, vb.max.y, 0.45), lerp(vc.z, vb.max.z, 0.45)));
+  hit(ctx, chest, { count: 45, wound: 0.07, sound: 'crunch', impact: 1.2, mist: 0.8 });
+  await Promise.all([struggle(ctx, vic, 0.14, 1), anim.tween(0.14, (k) => (p.head.rotation.x = lerp(0.45, 0.6, k)))]);
+  // hooked up and tossed: it tumbles end over end and lands across the line, on its side
+  const land = inVic(0, 0, dist + 0.62);
+  land.y = (vb.max.x - vb.min.x) / 2 + 0.02;
+  const landW = vic.root.localToWorld(land.clone()).setY(BOARD_Y);
+  D.cut(shot({ at: ctx.V.clone().addScaledVector(ctx.dir, 0.1), yaw: 22, pitch: 6, dist: 1.9, lift: 0.62, fov: 34 }));
   sfx.play('whoosh', { dur: 0.7 });
-  const toss = D.track({ at: () => bodyPoint(vic, 0.0), yaw: 40, pitch: 2, dist: 2.1, lift: 0.0 }, 16);
-  await anim.tween(0.6, (k) => {
-    p.head.rotation.x = lerp(0.4, -0.8, Math.min(1, k * 3));
-    vic.root.position.lerpVectors(v0, apex, Ease.outQuad(k));
-    vic.model.rotation.x = k * Math.PI * 2.2;
-    gait(p, 0, 0);
-    if (Math.random() < 0.6) ctx.gore.spray(bodyPoint(vic, 0.25), null, { count: 3, speed: 0.8, up: 0 });
-  });
-  await anim.tween(0.42, (k) => {
-    vic.root.position.lerpVectors(apex, land, Ease.inQuad(k));
-    vic.model.rotation.x = Math.PI * 2.2 + k * Math.PI * 0.8;
-  });
-  toss();
-  vic.model.rotation.set(0, 0, -1.4);
+  await Promise.all([
+    struggle(ctx, vic, 0.75, 0.8, true),
+    anim.tween(0.75, (k) => {
+      const to = rest.clone().lerp(land, k);
+      to.y += arc(k, 0.62);
+      heavyHold(vic, vc, to, -Math.PI * 2 * Ease.inOutSine(k), (Math.PI / 2) * k, (Math.PI / 2) * Ease.inOutQuad(k));
+      p.head.rotation.x = lerp(0.6, -0.7, Ease.outQuad(Math.min(1, k * 3)));
+      if (Math.random() < 0.4) ctx.gore.spray(vic.model.localToWorld(vc.clone()), null, { count: 3, speed: 0.8, up: 0 });
+    }),
+  ]);
+  heavyHold(vic, vc, land, 0, Math.PI / 2, Math.PI / 2);
   sfx.play('thud');
   sfx.play('crunch');
-  ctx.gore.burst(land.clone().setY(BOARD_Y + 0.1), 0.6);
+  ctx.gore.burst(landW.clone().setY(BOARD_Y + 0.1), 0.45);
   ctx.world.shake(0.25);
-  // trample
-  await anim.tween(0.35, (k) => {
-    setZ(atk, lerp(dist - 0.3, dist + 0.25, k), 0);
-    p.head.rotation.x = lerp(-0.8, 0.2, k);
-  });
-  D.cut({ at: land, yaw: 45, pitch: 22, dist: 1.3, lift: 0.15, fov: 32 });
+  // trots up and rears over it
+  const stomp = dist + 0.62 - 0.42;
+  const hind = new THREE.Vector3(0, 0, -0.17);
+  const rear = (rx, legs) => {
+    rotateAbout(atk, rx, hind, 1, new THREE.Vector3(0, 0.07, stomp));
+    p.legFL.rotation.x = p.legFR.rotation.x = legs;
+  };
+  D.cut(shot({ at: landW, yaw: 42, pitch: 16, dist: 1.4, lift: 0.22, fov: 34 }));
+  await anim.tween(0.4, (k, raw) => {
+    setZ(atk, lerp(end, stomp, k), 0);
+    p.head.rotation.x = lerp(-0.7, 0.15, k);
+    gait(p, raw * 10, 0.4 * Math.sin(raw * Math.PI));
+  }, Ease.inOutQuad);
+  gait(p, 0, 0);
   for (let i = 0; i < 2; i++) {
-    const leg = i % 2 ? p.legFR : p.legFL;
-    await anim.tween(0.2, (k) => {
-      leg.rotation.x = -1.0 * Ease.outQuad(k);
-      atk.model.rotation.x = -0.25 * k;
-    });
-    await anim.tween(0.1, (k) => {
-      leg.rotation.x = -1.0 + 1.0 * k;
-      atk.model.rotation.x = -0.25 + 0.35 * k;
-    }, Ease.inQuad);
+    // the killing stomp, seen head-on
+    if (i === 1) killcam(ctx, shot({ at: landW, yaw: 78, pitch: 10, dist: 1.45, lift: 0.28, fov: 34 }), 0.15, 1.1);
+    await anim.tween(0.24, (k) => rear(-0.42 * k, -0.6 * k), Ease.outQuad);
+    await anim.tween(0.09, (k) => rear(lerp(-0.42, -0.1, k), lerp(-0.6, -0.35, k)), Ease.inQuad);
     sfx.play('thud');
     sfx.play('crunch');
-    hit(ctx, bodyPoint(vic, 0.12), { count: 50, wound: 0.06, sound: null, impact: 1 });
     ctx.world.shake(0.3);
+    if (i === 0) {
+      hit(ctx, vic.model.localToWorld(vc.clone()), { count: 35, wound: 0.06, sound: null, impact: 1 });
+      vic.model.scale.set(0.8, 1, 1);
+      heavyHold(vic, vc, land, 0, Math.PI / 2, Math.PI / 2);
+      await anim.wait(0.08);
+    } else {
+      finish(ctx, { mode: 'limbs', power: 1.5, up: 1.0 });
+    }
   }
-  killcam(ctx, { at: land, yaw: 42, pitch: 12, dist: 1.3, lift: 0.2, fov: 30 }, 0.15, 1.3);
-  await anim.tween(0.12, (k) => {
-    p.legFL.rotation.x = p.legFR.rotation.x = -0.9 * k;
-    atk.model.rotation.x = 0.1 - 0.3 * k;
-  });
-  await anim.tween(0.08, (k) => {
-    p.legFL.rotation.x = p.legFR.rotation.x = -0.9 * (1 - k);
-    atk.model.rotation.x = -0.2 + 0.3 * k;
-  });
-  finish(ctx, { mode: 'limbs', power: 2.6, up: 1.4 });
-  await D.orbit({ at: land, yaw: 42, pitch: 12, dist: 1.5, lift: 0.2 }, 170, 1.6);
-  await anim.tween(0.45, (k) => {
-    atk.model.rotation.x = lerp(0.1, 0, k);
-    p.head.rotation.x = 0.2 * (1 - k);
-    setZ(atk, lerp(dist + 0.25, dist, k), 0);
-  });
-  vic.root.position.copy(v0);
+  // steps back off the carcass as the camera swings round
+  const orbit = shot({ at: landW, yaw: 78, pitch: 16, dist: 1.55, lift: 0.22 }, 118);
+  await Promise.all([
+    D.orbit(orbit, orbit.to, 1.5),
+    anim.wait(0.5).then(() =>
+      anim.tween(0.55, (k) => {
+        rotateAbout(atk, lerp(-0.1, 0, k), hind, 1, new THREE.Vector3(0, 0.07, lerp(stomp, dist, k)));
+        p.legFL.rotation.x = p.legFR.rotation.x = lerp(-0.35, 0, k);
+        p.head.rotation.x = 0.15 * (1 - k);
+      }, Ease.inOutQuad),
+    ),
+  ]);
 }
 
 // ------------------------------------------------------------------ SCORPION: Death Sting
