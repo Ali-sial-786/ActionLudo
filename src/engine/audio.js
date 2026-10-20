@@ -458,7 +458,7 @@ class Sfx {
         if (i) {
           // the recorded bed sits a little under the effects
           const bed = ctx.createGain();
-          bed.gain.value = 0.55;
+          bed.gain.value = 0.22;
           src.connect(bed).connect(gain);
         } else src.connect(gain);
         src.start(t);
@@ -803,19 +803,21 @@ function wetSlap(s, { delay = 0, vol = 0.35, f = 380, toF = 1000, dur = 0.18, pa
 // Each animal's own call: a recording when there is one, else its synthesised voice.
 const CALLS = {
   tiger: ['roar_bigcat', 1.05, 'roar'],
-  wolf: ['snarl_wolf', 1, 'growl'],
+  wolf: ['snarl_wolf', 0.9, 'growl'],
   bear: ['roar_bear', 1, 'roar'],
   eagle: ['screech_eagle', 1, 'screech'],
   cobra: ['hiss_snake', 1, 'hiss'],
-  shark: ['growl_bigcat', 0.7, 'growl'],
+  shark: ['growl_bear', 0.8, 'growl'],
   gorilla: ['roar_gorilla', 1, 'roar'],
   rhino: ['snort_bull', 1, 'snort'],
   scorpion: ['hiss_snake', 1.5, 'hiss'],
-  crocodile: ['hiss_croc', 1, 'hiss'],
+  crocodile: ['bellow_croc', 1, 'hiss'],
 };
 function animalCall(s, animal, vol = 0.6) {
   const [kind, rate, synth] = CALLS[animal] ?? CALLS.tiger;
   if (!s.sample(kind, { vol, rate, dur: 1.6, wet: 0.25 })) SOUNDS[synth](s, { pitch: 1.1 });
+  // the alligator's bellow is mostly too low for small speakers: add a hiss on top
+  if (animal === 'crocodile') s.sample('hiss_snake', { vol: 0.25, rate: 0.8, dur: 0.9 });
 }
 
 // Pentatonic scale for pitched game feedback.
@@ -1072,7 +1074,8 @@ const SOUNDS = {
     s.noise({ color: 'pink', dur: 1.15, vol: 0.28, filter: 'bandpass', freq: 750 * pitch, to: 300, q: 1.3, attack: 0.06, hold: 0.35, am: 31, amDepth: 0.3, wet: 0.3 });
   },
   growl: (s, { pitch = 1, dur = 0.9 } = {}) => {
-    if (s.sample('growl_bigcat', { vol: 0.65, rate: Math.pow(pitch, 0.6), dur, wet: 0.2 })) return;
+    const kind = pitch < 0.95 ? 'growl_bear' : pitch > 1.15 ? 'snarl_wolf' : 'growl_bigcat';
+    if (s.sample(kind, { vol: 0.65, rate: Math.pow(pitch, 0.4), dur: Math.max(dur, 0.6), wet: 0.2 })) return;
     voice(s, { f: 72 * pitch, curve: [[0, 68 * pitch], [0.5, 82 * pitch], [1, 64 * pitch]], dur, vol: 0.3, vowel: 'o', vowelTo: 'u', attack: 0.12, hold: 0.5, am: 26, amDepth: 0.5, dist: 10, detune: 10, wet: 0.2 }); // prettier-ignore
     s.noise({ color: 'pink', dur, vol: 0.14, filter: 'bandpass', freq: 420 * pitch, q: 2, attack: 0.1, hold: 0.4, am: 26, amDepth: 0.4 });
   },
@@ -1096,7 +1099,7 @@ const SOUNDS = {
     s.noise({ color: 'pink', dur: 0.7, vol: 0.08, filter: 'bandpass', freq: 2600, q: 1.5, attack: 0.15, hold: 0.4 });
   },
   snort: (s) => {
-    if (s.sample('snort_bull', { vol: 0.6, wet: 0.15 })) return;
+    if (s.sample('snort_bull', { vol: 0.35, dur: 1.2, wet: 0.15 })) return;
     s.noise({ color: 'pink', dur: 0.3, vol: 0.24, freq: 700, to: 220, attack: 0.02, am: 34, amDepth: 0.4 });
     s.tone({ type: 'sawtooth', freq: 95, to: 70, dur: 0.22, vol: 0.06, lp: 500, am: 34 });
   },
